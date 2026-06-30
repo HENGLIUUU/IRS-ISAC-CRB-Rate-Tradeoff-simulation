@@ -193,12 +193,12 @@ def generate_irs_cu_channel(N_irs, d_rc, phi_rc, Kc=1.0,
     return np.sqrt(L_rc) * h_channel.reshape(1, -1)  # 1×N_irs
 
 
-def compute_effective_a(a, G, h_r, v):
+def compute_effective_a(a, G, h_r, v, direct_blocked=False):
     """
     Compute effective target-direction steering vector  [new]
 
-    a_eff(Θ) = a + (h_r @ Θ @ G)^T
-            = a + G^T @ (h_r^T * v)
+    a_eff(Θ) = a + (h_r @ Θ @ G)^T   (LoS: direct + IRS)
+             = (h_r @ Θ @ G)^T         (NLoS: IRS only, direct blocked)
 
     where v = [e^{jθ₁}, ..., e^{jθ_N}]^T, Θ = diag(v)
 
@@ -207,6 +207,7 @@ def compute_effective_a(a, G, h_r, v):
         G: BS→IRS channel (N_irs×Mt)
         h_r: IRS→Target channel (1×N_irs)
         v: IRS phase shift vector (N_irs,)
+        direct_blocked: If True, remove direct BS→Target path
 
     Returns:
         a_eff: Effective steering vector (Mt×1)
@@ -215,6 +216,9 @@ def compute_effective_a(a, G, h_r, v):
     # h_r.T * v: element-wise → (N,)  (v[n] multiplies h_r[n])
     h_r_flat = h_r.flatten()  # (N,)
     irs_path = G.T @ (h_r_flat * v)  # Mt×N @ (N,) = (Mt,)
+    if direct_blocked:
+        # IRS-only path (no direct LoS)
+        return irs_path.reshape(-1, 1)  # Mt×1
     # Both operands 1D → (Mt,), then reshape to column
     return (a.flatten() + irs_path).reshape(-1, 1)  # Mt×1
 
