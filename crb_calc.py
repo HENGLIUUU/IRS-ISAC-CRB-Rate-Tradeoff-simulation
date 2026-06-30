@@ -131,3 +131,30 @@ def compute_crb_deterministic(theta, R, a, b, b_dot, alpha_sq, sigma2_s, T):
     crb = sigma2_s / (2 * T * alpha_sq * aH_R_a * norm_bdot**2)
 
     return crb
+
+
+def compute_crb_irs(theta, Rc, Rs, a_eff, b, b_dot, alpha_sq, sigma2_s, T):
+    """
+    Compute CRB with IRS-enhanced effective steering vector  [new]
+
+    Same formula as Case 2 (Eq.45), but uses a_eff instead of a.
+    The IRS effect is entirely captured in a_eff — the CRB formula
+    structure is unchanged.
+
+    Args:
+        theta: Target DoA (rad)
+        Rc: Information covariance (Mt×Mt)
+        Rs: Sensing covariance (Mt×Mt)
+        a_eff: Effective steering vector (Mt×1) — already includes IRS path
+        b: RX steering vector (Mr×1)
+        b_dot: Derivative of b (Mr×1)
+        alpha_sq: |alpha|^2 target channel coefficient
+        sigma2_s: Sensing RX noise power
+        T: Number of symbols
+
+    Returns:
+        crb: CRB value (rad²)
+    """
+    # Delegate to existing Case 2 CRB with a_eff in place of a
+    return compute_crb_case2(theta, Rc, Rs, a_eff, b, b_dot,
+                             alpha_sq, sigma2_s, T)

@@ -57,3 +57,22 @@ def compute_rate_case2(Rc, Rs, h, sigma2_c):
     sinr = signal / (interfer + sigma2_c)
     rate = np.log2(1 + max(sinr, 0))
     return rate, sinr
+
+
+def compute_rate_irs(Rc, Rs, h_eff, sigma2_c):
+    """
+    Compute communication rate with IRS-enhanced effective channel  [new]
+
+    Same formula as Case 2 (Eq.13-14), but uses h_eff instead of h.
+
+    Args:
+        Rc: Information covariance (Mt×Mt)
+        Rs: Sensing covariance (Mt×Mt)
+        h_eff: Effective CU channel (Mt×1) — already includes IRS path
+        sigma2_c: CU noise power
+
+    Returns:
+        rate: Achievable rate (bps/Hz)
+        sinr: SINR (linear scale)
+    """
+    return compute_rate_case2(Rc, Rs, h_eff, sigma2_c)
