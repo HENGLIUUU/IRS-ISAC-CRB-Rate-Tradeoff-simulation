@@ -94,3 +94,147 @@ def compute_alpha_sq(d_bt, d_tr, beta=1.0,
     L_tr = path_loss_linear(d_tr, K0, alpha0, d0)
     raw_alpha_sq = beta / (L_bt * L_tr)
     return raw_alpha_sq * CAL
+
+
+# ========================================================================
+# IRS 信道模型 — IRS-assisted Bistatic ISAC 项目新增
+# 参考设计文档 §1.2
+# ========================================================================
+
+def compute_distance(pos1, pos2):
+    """Euclidean distance between two points."""
+    return np.linalg.norm(pos1 - pos2)
+
+
+def compute_angle(pos_from, pos_to):
+    """Angle from pos_from to pos_to (rad)."""
+    delta = pos_to - pos_from
+    return np.arctan2(delta[1], delta[0])
+
+
+def generate_irs_bs_channel(Mt, N_irs, d_br, phi_br,
+                            K0=-30, alpha0=2.5, d0=1.0):
+    """
+    Generate BS → IRS channel matrix G ∈ ℂ^{N_irs×Mt}  [new]
+
+    LoS MIMO channel model between two ULAs:
+    G = sqrt(L(d_br)) * a_irs(phi_br) @ a_bs(phi_br)^H
+
+    Args:
+        Mt: BS antennas
+        N_irs: IRS elements
+        d_br: BS-IRS distance (m)
+        phi_br: IRS direction from BS (rad)
+        K0, alpha0, d0: Path loss parameters (Paper 4 Eq.63)
+
+    Returns:
+        G: BS→IRS channel (N_irs × Mt)
+    """
+    L_br = path_loss_linear(d_br, K0, alpha0, d0)
+    a_bs  = steering_vector(Mt, phi_br)     # Mt×1: BS steering toward IRS
+    a_irs = steering_vector(N_irs, phi_br)   # N_irs×1: IRS steering from BS
+
+    # LoS MIMO channel: G = sqrt(L) * a_irs * a_bs^H
+    G = np.sqrt(L_br) * (a_irs @ a_bs.conj().T)
+    return G
+
+
+def generate_irs_target_channel(N_irs, d_rt, phi_rt,
+                                K0=-30, alpha0=2.5, d0=1.0):
+    """
+    Generate IRS → Target channel h_r ∈ ℂ^{1×N_irs}  [new]
+
+    IRS reflects signal toward target. The cascaded path is
+    BS→IRS→Target→SensingRX. The h_r is the IRS→Target steering.
+
+    Args:
+        N_irs: IRS elements
+        d_rt: IRS-Target distance via target reflection (m)
+        phi_rt: Target direction from IRS (rad)
+
+    Returns:
+        h_r: IRS→Target channel (1 × N_irs)
+    """
+    L_rt = path_loss_linear(d_rt, K0, alpha0, d0)
+    a_irs_target = steering_vector(N_irs, phi_rt)  # N_irs×1
+
+    # 1×N_irs: conjugate transpose of steering vector
+    h_r = np.sqrt(L_rt) * a_irs_target.conj().T
+    return h_r
+
+
+def generate_irs_cu_channel(N_irs, d_rc, phi_rc, Kc=1.0,
+                            K0=-30, alpha0=2.5, d0=1.0, seed=42):
+    """
+    Generate IRS → CU channel h_rc ∈ ℂ^{1×N_irs}  [new]
+
+    Rician fading (similar to BS→CU, Paper 4 Eq.62).
+
+    Args:
+        N_irs: IRS elements
+        d_rc: IRS-CU distance (m)
+        phi_rc: CU direction from IRS (rad)
+        Kc: Rician K-factor
+        seed: Random seed
+    """
+    np.random.seed(seed)
+    L_rc = path_loss_linear(d_rc, K0, alpha0, d0)
+
+    # LoS component
+    h_los = steering_vector(N_irs, phi_rc).flatten()  # N_irs,
+
+    # NLoS component
+    h_nlos = (np.random.randn(N_irs) + 1j * np.random.randn(N_irs)) / np.sqrt(2)
+
+    # Rician combination
+    h_channel = (np.sqrt(Kc / (Kc + 1)) * h_los
+                 + np.sqrt(1 / (Kc + 1)) * h_nlos)
+
+    return np.sqrt(L_rc) * h_channel.reshape(1, -1)  # 1×N_irs
+
+
+def compute_effective_a(a, G, h_r, v):
+    """
+    Compute effective target-direction steering vector  [new]
+
+    a_eff(Θ) = a + (h_r @ Θ @ G)^T
+            = a + G^T @ (h_r^T * v)
+
+    where v = [e^{jθ₁}, ..., e^{jθ_N}]^T, Θ = diag(v)
+
+    Args:
+        a: Direct-path steering vector (Mt×1)
+        G: BS→IRS channel (N_irs×Mt)
+        h_r: IRS→Target channel (1×N_irs)
+        v: IRS phase shift vector (N_irs,)
+
+    Returns:
+        a_eff: Effective steering vector (Mt×1)
+    """
+    # h_r @ Θ @ G → (1×N) @ (N×N) @ (N×Mt) = 1×Mt
+    # h_r.T * v: element-wise → (N,)  (v[n] multiplies h_r[n])
+    h_r_flat = h_r.flatten()  # (N,)
+    irs_path = G.T @ (h_r_flat * v)  # Mt×N @ (N,) = (Mt,)
+    # Both operands 1D → (Mt,), then reshape to column
+    return (a.flatten() + irs_path).reshape(-1, 1)  # Mt×1
+
+
+def compute_effective_h(h, G, h_rc, v):
+    """
+    Compute effective CU channel vector  [new]
+
+    h_eff(Θ) = h + (h_rc @ Θ @ G)^T
+             = h + G^T @ (h_rc^T * v)
+
+    Args:
+        h: Direct-path CU channel (Mt×1)
+        G: BS→IRS channel (N_irs×Mt)
+        h_rc: IRS→CU channel (1×N_irs)
+        v: IRS phase shift vector (N_irs,)
+
+    Returns:
+        h_eff: Effective CU channel (Mt×1)
+    """
+    h_rc_flat = h_rc.flatten()  # (N,)
+    irs_path = G.T @ (h_rc_flat * v)  # (Mt,)
+    return (h.flatten() + irs_path).reshape(-1, 1)  # Mt×1
