@@ -223,6 +223,27 @@ def compute_effective_a(a, G, h_r, v, direct_blocked=False):
     return (a.flatten() + irs_path).reshape(-1, 1)  # Mt×1
 
 
+def irs_beam_align(h_r, G):
+    """
+    Align IRS phases to maximize signal toward target.
+
+    Sets each element's phase to compensate the BS->IRS and IRS->Target paths,
+    making all N reflected signals add coherently at the target.
+
+    v_align[n] = exp(-j * (angle(G[n,0]) + angle(h_r[0,n])))
+
+    Args:
+        h_r: IRS->Target channel (1xN)
+        G: BS->IRS channel (NxMt)
+
+    Returns:
+        v_align: Phase shift vector (N,) with |v| = 1
+    """
+    G_ref = G[:, 0]
+    v = np.exp(-1j * (np.angle(h_r.flatten()) + np.angle(G_ref)))
+    return v / (np.abs(v) + 1e-15)
+
+
 def compute_effective_h(h, G, h_rc, v):
     """
     Compute effective CU channel vector  [new]

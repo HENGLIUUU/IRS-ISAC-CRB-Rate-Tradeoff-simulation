@@ -4,7 +4,7 @@
 对应论文 Eq.(4) [Case 1] 和 Eq.(13)-(14) [Case 2]。
 
 用法:
-    from comm_rate import compute_rate_case1, compute_rate_case2
+    from rate import compute_rate_case1, compute_rate_case2
     rate1, sinr1 = compute_rate_case1(Rc, h, sigma2_c)
     rate2, sinr2 = compute_rate_case2(Rc, Rs, h, sigma2_c)
 """
@@ -61,14 +61,14 @@ def compute_rate_case2(Rc, Rs, h, sigma2_c):
 
 def compute_rate_irs(Rc, Rs, h_eff, sigma2_c):
     """
-    Compute communication rate with IRS-enhanced effective channel  [new]
+    Compute communication rate with IRS-enhanced effective channel.
 
     Same formula as Case 2 (Eq.13-14), but uses h_eff instead of h.
 
     Args:
         Rc: Information covariance (Mt×Mt)
         Rs: Sensing covariance (Mt×Mt)
-        h_eff: Effective CU channel (Mt×1) — already includes IRS path
+        h_eff: Effective CU channel (Mt×1)
         sigma2_c: CU noise power
 
     Returns:

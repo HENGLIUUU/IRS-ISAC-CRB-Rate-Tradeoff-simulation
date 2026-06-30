@@ -20,7 +20,7 @@ N_irs = 16         # IRS reflecting elements (start at 16, can go to 32)
 pos_bs     = np.array([0.0, 0.0])
 pos_target = np.array([200.0, 0.0])
 pos_rx     = np.array([400.0, 0.0])
-pos_irs    = np.array([50.0, 30.0])   # typical IRS placement near BS
+pos_irs    = np.array([190.0, 5.0])   # optimized: near target for NLoS sensing
 
 # ===== Power & Noise =====
 P_dBm      = 30.0

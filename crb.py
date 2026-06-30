@@ -4,15 +4,15 @@ CRB 计算函数模块
 对应论文 Eq.(22) [Case 1] 和 Eq.(45) [Case 2]。
 
 用法:
-    from crb_calc import compute_crb_case1, compute_crb_case2
-    crb1 = compute_crb_case1(theta, Rc, a, b, b_dot, alpha_sq, sigma2_s, T)
-    crb2 = compute_crb_case2(theta, Rc, Rs, a, b, b_dot, alpha_sq, sigma2_s, T)
+    from crb import compute_crb_case1, compute_crb_case2
+    crb1 = compute_crb_case1(Rc, a, b, b_dot, alpha_sq, sigma2_s, T)
+    crb2 = compute_crb_case2(Rc, Rs, a, b, b_dot, alpha_sq, sigma2_s, T)
 """
 
 import numpy as np
 
 
-def compute_crb_case1(theta, Rc, a, b, b_dot, alpha_sq, sigma2_s, T):
+def compute_crb_case1(Rc, a, b, b_dot, alpha_sq, sigma2_s, T):
     """
     Compute CRB for target DoA estimation with Gaussian signals only  [Eq.(22)].
 
@@ -20,7 +20,6 @@ def compute_crb_case1(theta, Rc, a, b, b_dot, alpha_sq, sigma2_s, T):
                   * (1 + sigma2_s / (|alpha|^2 * a^H R_c a * ||b||^2))
 
     Args:
-        theta: Target DoA (rad)
         Rc: Transmit covariance matrix (Mt x Mt)
         a: BS steering vector toward phi_target (Mt, 1)
         b: RX steering vector toward theta_target (Mr, 1)
@@ -46,7 +45,7 @@ def compute_crb_case1(theta, Rc, a, b, b_dot, alpha_sq, sigma2_s, T):
     return crb
 
 
-def compute_crb_case2(theta, Rc, Rs, a, b, b_dot, alpha_sq, sigma2_s, T):
+def compute_crb_case2(Rc, Rs, a, b, b_dot, alpha_sq, sigma2_s, T):
     """
     Compute CRB for target DoA estimation with superposition signals  [Eq.(45)].
 
@@ -59,7 +58,6 @@ def compute_crb_case2(theta, Rc, Rs, a, b, b_dot, alpha_sq, sigma2_s, T):
         gamma_ran = |alpha|^2 * a^H R_c a * ||b||^2 / sigma2_s
 
     Args:
-        theta: Target DoA (rad)
         Rc: Information signal covariance matrix (Mt x Mt)
         Rs: Deterministic sensing signal covariance matrix (Mt x Mt)
         a: BS steering vector toward phi_target (Mt, 1)
@@ -99,17 +97,16 @@ def compute_crb_case2(theta, Rc, Rs, a, b, b_dot, alpha_sq, sigma2_s, T):
     return crb
 
 
-def compute_crb_deterministic(theta, R, a, b, b_dot, alpha_sq, sigma2_s, T):
+def compute_crb_deterministic(R, a, b, b_dot, alpha_sq, sigma2_s, T):
     """
     Compute CRB for target DoA estimation with deterministic signals  [Eq.(23)].
     Used for: "ISAC with given realizations of information signals" benchmark.
 
     CRB_d(theta) = sigma2_s / (2 * T * |alpha|^2 * a^H R a * ||b_dot||^2)
 
-    Note: no (1 + 1/gamma_ran) penalty term — the receiver knows the signal realizations.
+    Note: no (1 + 1/gamma_ran) penalty term.
 
     Args:
-        theta: Target DoA (rad)
         R: Transmit covariance matrix (Mt x Mt)
         a: BS steering vector toward phi_target (Mt, 1)
         b: RX steering vector toward theta_target (Mr, 1)
@@ -133,16 +130,14 @@ def compute_crb_deterministic(theta, R, a, b, b_dot, alpha_sq, sigma2_s, T):
     return crb
 
 
-def compute_crb_irs(theta, Rc, Rs, a_eff, b, b_dot, alpha_sq, sigma2_s, T):
+def compute_crb_irs(Rc, Rs, a_eff, b, b_dot, alpha_sq, sigma2_s, T):
     """
-    Compute CRB with IRS-enhanced effective steering vector  [new]
+    Compute CRB with IRS-enhanced effective steering vector.
 
     Same formula as Case 2 (Eq.45), but uses a_eff instead of a.
-    The IRS effect is entirely captured in a_eff — the CRB formula
-    structure is unchanged.
+    The IRS effect is entirely captured in a_eff.
 
     Args:
-        theta: Target DoA (rad)
         Rc: Information covariance (Mt×Mt)
         Rs: Sensing covariance (Mt×Mt)
         a_eff: Effective steering vector (Mt×1) — already includes IRS path
@@ -155,6 +150,5 @@ def compute_crb_irs(theta, Rc, Rs, a_eff, b, b_dot, alpha_sq, sigma2_s, T):
     Returns:
         crb: CRB value (rad²)
     """
-    # Delegate to existing Case 2 CRB with a_eff in place of a
-    return compute_crb_case2(theta, Rc, Rs, a_eff, b, b_dot,
+    return compute_crb_case2(Rc, Rs, a_eff, b, b_dot,
                              alpha_sq, sigma2_s, T).item()

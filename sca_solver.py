@@ -10,12 +10,13 @@ Case 2 波束赋形优化求解器 (SCA)
          tr(R_c) + tr(R_s) <= P                           (Power)
 
 用法:
-    from case2_solver import solve_p4_sca
+    from sca_solver import solve_p4_sca
     Rc_opt, Rs_opt, info = solve_p4_sca(gamma_0, h, a, sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_sq)
 """
 
 import numpy as np
 import cvxpy as cp
+from cvxpy.error import SolverError
 
 
 def solve_p4_sca(gamma_0, h, a, sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_sq,
@@ -48,9 +49,7 @@ def solve_p4_sca(gamma_0, h, a, sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_s
 
     # ========================================================================
     # SINR: h^H R_c h >= gamma_0 * (h^H R_s h + sigma2_c)
-    #   h_tilde = h / sqrt(sigma2_c),
-    #   h_tilde^H R_c h_tilde >= gamma_0 * (h_tilde^H R_s h_tilde + 1)
-    # 这一步主要是解决求解器容差问题，扩大数值范围，避免过小的数值导致求解器误判不可行或不收敛。
+    # Normalize by sqrt(sigma2_c) for better numerical stability
     # ========================================================================
     sigma_c_sqrt = np.sqrt(sigma2_c)
     h_tilde = h_flat / sigma_c_sqrt
@@ -59,29 +58,26 @@ def solve_p4_sca(gamma_0, h, a, sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_s
     # ========================================================================
     # Feasibility check
     # ========================================================================
-    max_SINR = P * np.linalg.norm(h_flat)**2 / sigma2_c  # = P * h_norm_sq
+    max_SINR = P * np.linalg.norm(h_flat)**2 / sigma2_c
     if gamma_0 > max_SINR:
         return None, None, {"status": f"infeasible: gamma_0={10*np.log10(gamma_0):.1f}dB > max SINR ({10*np.log10(max_SINR):.1f}dB)"}
 
     # ========================================================================
     # Constants for SCA
     # ========================================================================
-    C = alpha_sq * np.linalg.norm(b_flat)**2 / sigma2_s       # Eq.(45): 变量打包一下 gamma_ran = C * a^H R_c a
-    H_mat = np.outer(h_tilde, h_tilde.conj())                  # h_tilde @ h_tilde^H (normalized)
-    M_mat = np.outer(a_flat.conj(), a_flat)                    # a* @ a^T  (so tr(R @ M) = a^T R a*)
+    C = alpha_sq * np.linalg.norm(b_flat)**2 / sigma2_s
+    H_mat = np.outer(h_tilde, h_tilde.conj())
+    M_mat = np.outer(a_flat.conj(), a_flat)
 
     # ========================================================================
-    # Initialization: ensure feasible (account for Rs interference at CU)
+    # Initialization: ensure feasible
     # ========================================================================
     a_norm = a_flat / np.linalg.norm(a_flat)
-    h_a_corr_sq = np.abs(h_tilde.conj() @ a_norm)**2          # |a_norm^H h_tilde|^2
+    h_a_corr_sq = np.abs(h_tilde.conj() @ a_norm)**2
 
-    # Rc must overcome both noise AND Rs interference
-    # Solve: Rc_power * h_norm_sq >= gamma_0 * ((P - Rc_power) * h_a_corr_sq + 1)
-    # => Rc_power * (h_norm_sq + gamma_0 * h_a_corr_sq) >= gamma_0 * (P * h_a_corr_sq + 1)
     denom = h_norm_sq + gamma_0 * h_a_corr_sq
     numer = gamma_0 * (P * h_a_corr_sq + 1)
-    Rc_power = min(numer / denom, P * 0.95)
+    Rc_power = min(numer / denom, P * 0.95)  # cap at 95%: leave 5% power for Rs sensing even at high gamma_0
     Rc = Rc_power * np.outer(h_flat, h_flat.conj()) / np.linalg.norm(h_flat)**2
 
     Rs_power = P - Rc_power
@@ -100,9 +96,9 @@ def solve_p4_sca(gamma_0, h, a, sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_s
         Rc_old = Rc.copy()
         Rs_old = Rs.copy()
 
-        # ---- Step 1: Compute Taylor expansion coefficients  [Eq.(59)] ----
-        x_k = (a_flat.T @ Rc @ a_flat.conj()).real               # a^H R_c a (current)
-        Cx = C * x_k                                               # gamma_ran(current)
+        # ---- Step 1: Taylor expansion coefficients  [Eq.(59)] ----
+        x_k = (a_flat.T @ Rc @ a_flat.conj()).real
+        Cx = C * x_k
         if Cx > 1e-15:
             h_prime = C * (2 + Cx) / (1 + Cx)**2
         else:
@@ -112,10 +108,8 @@ def solve_p4_sca(gamma_0, h, a, sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_s
         Rc_var = cp.Variable((Mt, Mt), complex=True)
         Rs_var = cp.Variable((Mt, Mt), complex=True)
 
-        # Objective: maximize  tr(Rs @ M) + h_prime * tr(Rc @ M)
         obj = cp.real(cp.trace(Rs_var @ M_mat) + h_prime * cp.trace(Rc_var @ M_mat))
 
-        # Normalized SINR constraint: h_tilde^H R_c h_tilde >= gamma_0 * (h_tilde^H R_s h_tilde + 1)
         constraints = [
             Rc_var >> 0,
             Rs_var >> 0,
@@ -124,7 +118,12 @@ def solve_p4_sca(gamma_0, h, a, sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_s
         ]
 
         prob = cp.Problem(cp.Maximize(obj), constraints)
-        prob.solve(solver=cp.SCS, verbose=False, eps=1e-5, max_iters=10000)
+        try:
+            prob.solve(solver=cp.SCS, verbose=False, eps=1e-5, max_iters=10000)
+        except SolverError:
+            if k == 0:
+                return Rc, Rs, {"status": "solver_error_at_init", "iters": 0}
+            break
 
         if prob.status not in ("optimal", "optimal_inaccurate"):
             if k == 0:

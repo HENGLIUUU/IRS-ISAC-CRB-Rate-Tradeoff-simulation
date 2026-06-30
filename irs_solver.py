@@ -193,7 +193,7 @@ def solve_irs_sdr(Rc, Rs, a, h, G, h_r, h_rc,
 
     # ---- Randomization: recover rank-1 v from V ----
     v_best = _randomization(V_irs, Rc, Rs, A_mat, a_flat,
-                            b_flat, b_dot,     # <-- FIX: pass b_flat and b_dot
+                            b_flat, b_dot,
                             norm_b_sq, norm_bdot_sq,
                             alpha_sq, sigma2_s, T, trials)
 
@@ -211,7 +211,7 @@ def solve_irs_sdr(Rc, Rs, a, h, G, h_r, h_rc,
 
 
 def _randomization(V, Rc, Rs, A_mat, a_flat,
-                   b_flat, b_dot_flat,          # <-- FIX: added b_flat and b_dot_flat params
+                   b_flat, b_dot_flat,
                    norm_b_sq, norm_bdot_sq,
                    alpha_sq, sigma2_s, T, trials=100):
     """
@@ -251,7 +251,7 @@ def _randomization(V, Rc, Rs, A_mat, a_flat,
         # Evaluate CRB
         a_eff = a_flat + A_mat @ v
         crb = _compute_crb_given_aeff(a_eff, Rc, Rs,
-                                       b_flat, b_dot_flat,  # <-- FIX: pass proper b vectors
+                                       b_flat, b_dot_flat,
                                        alpha_sq, sigma2_s, T)
         if crb < best_crb:
             best_crb = crb

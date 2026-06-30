@@ -5,35 +5,43 @@ IRS-assisted Bistatic ISAC — AO Framework Main Script
 信号模型: Case 2 (叠加信号: 高斯信息 + 确定性感知信号)
 
 AO 框架:
-  Step 1: 固定 Θ, 优化 R_c, R_s (复用 case2_solver.py)
-  Step 2: 固定 R_c, R_s, 优化 Θ (irs_solver.py SDR)
+  Step 1: 固定 Theta, 优化 R_c, R_s (复用 sca_solver.py)
+  Step 2: 固定 R_c, R_s, 优化 Theta (irs_solver.py SDR)
 
 场景对比:
-  - LoS: BS→Target 直射径通畅
-  - NLoS: BS→Target 直射径遮挡, 仅靠 IRS 反射径感知
+  - LoS: BS->Target 直射径通畅
+  - NLoS: BS->Target 直射径遮挡, 仅靠 IRS 反射径感知
   - IRS 规模: N=16, N=32
 
 用法:
-    python main_irs.py
+    python run_simulation.py
 """
 
-import os, time, numpy as np
-import sys
+import os
+import time
+import numpy as np
 
-from config import *
+from config import (
+    Mt, Mr, T, Kc, K0, alpha0, d0, CAL_ALPHA,
+    N_gamma, gamma_0_dB_min, gamma_0_dB_max,
+    pos_bs, pos_target, pos_rx, pos_irs,
+    phi_target, theta_target, phi_cu,
+    sigma2_c, sigma2_s, P, P_dBm, SEED, SEED_CHANNEL,
+    AO_MAX_ITER, AO_TOL, SDR_TRIALS,
+)
 from steering_vectors import steering_vector, steering_vector_derivative
 from channels import (
     generate_rician_channel, compute_alpha_sq,
     generate_irs_bs_channel, generate_irs_target_channel,
     generate_irs_cu_channel,
-    compute_effective_a, compute_effective_h,
-    compute_distance, compute_angle
+    compute_effective_a, compute_effective_h, irs_beam_align,
+    compute_distance, compute_angle,
 )
-from crb_calc import compute_crb_irs
-from comm_rate import compute_rate_irs
-from case2_solver import solve_p4_sca
+from crb import compute_crb_irs
+from rate import compute_rate_irs
+from sca_solver import solve_p4_sca
 from irs_solver import solve_irs_sdr
-from plot_results import plot_irs_comparison, plot_comparison
+from plot_irs import plot_irs_comparison
 
 
 # ========================================================================
@@ -46,8 +54,7 @@ def init_geometry_and_channels():
     d_br = compute_distance(pos_bs, pos_irs)
     d_rt = compute_distance(pos_irs, pos_target)
 
-    pos_cu = np.array([1000.0 * np.cos(phi_cu),
-                       1000.0 * np.sin(phi_cu)])
+    pos_cu = np.array([1000.0 * np.cos(phi_cu), 1000.0 * np.sin(phi_cu)])
     d_rc = compute_distance(pos_irs, pos_cu)
     d_bc = compute_distance(pos_bs, pos_cu)
 
@@ -55,7 +62,6 @@ def init_geometry_and_channels():
     phi_rt = compute_angle(pos_irs, pos_target)
     phi_rc = compute_angle(pos_irs, pos_cu)
 
-    # Channels (independent of N_irs — regenerate per scenario)
     h = generate_rician_channel(Mt, phi_cu, Kc, d_bc,
                                 K0, alpha0, d0, SEED_CHANNEL)
     a_dir = steering_vector(Mt, phi_target)
@@ -99,15 +105,8 @@ def ao_optimize(gamma_0, a_eff_init, h_eff_init, G, h_r, h_rc,
     AO: Alternating optimization for IRS-assisted ISAC.
 
     Iterates between:
-      Step 1: Fix Θ, optimize R_c, R_s (case2_solver)
-      Step 2: Fix R_c, R_s, optimize Θ (irs_solver)
-
-    Args:
-        direct_blocked: If True, use IRS-only steering in compute_effective_a
-        a_dir: Direct-path steering vector (needed for compute_effective_a)
-
-    Returns:
-        Rc_opt, Rs_opt, theta_opt, info
+      Step 1: Fix Theta, optimize R_c, R_s (sca_solver)
+      Step 2: Fix R_c, R_s, optimize Theta (irs_solver)
     """
     v = np.ones(N_irs, dtype=complex)
     a_eff = a_eff_init.copy()
@@ -116,7 +115,7 @@ def ao_optimize(gamma_0, a_eff_init, h_eff_init, G, h_r, h_rc,
     history = []
 
     for k in range(AO_MAX_ITER):
-        # Step 1: Fix Θ, optimize R_c, R_s
+        # Step 1: Fix Theta, optimize R_c, R_s
         Rc, Rs, info_sca = solve_p4_sca(
             gamma_0, h_eff, a_eff, sigma2_c, sigma2_s,
             P, Mt, Mr, b, b_dot, alpha_sq
@@ -124,15 +123,14 @@ def ao_optimize(gamma_0, a_eff_init, h_eff_init, G, h_r, h_rc,
         if Rc is None:
             return None, None, None, {"status": f"SCA failed at AO iter {k}"}
 
-        # Step 2: Fix R_c, R_s, optimize Θ
-        # In NLoS: pass zeros for direct-path a in SDR (no linear coupling)
+        # Step 2: Fix R_c, R_s, optimize Theta
         a_sdr = a_dir if a_dir is not None and not direct_blocked else np.zeros(Mt, dtype=complex)
         v_new, info_irs = solve_irs_sdr(
             Rc, Rs, a_sdr, h_eff, G, h_r, h_rc, b, b_dot, alpha_sq,
             sigma2_c, sigma2_s, gamma_0, T, N_irs, Mt, trials=SDR_TRIALS
         )
         if v_new is None:
-            v_new = v  # SDR failed — keep current
+            v_new = v  # SDR failed -- keep current
 
         # Update effective channels
         a_eff_new = compute_effective_a(
@@ -142,8 +140,8 @@ def ao_optimize(gamma_0, a_eff_init, h_eff_init, G, h_r, h_rc,
         h_eff_new = compute_effective_h(h_eff, G, h_rc, v_new)
 
         # Convergence check
-        crb_old = compute_crb_irs(0, Rc, Rs, a_eff, b, b_dot, alpha_sq, sigma2_s, T)
-        crb_new = compute_crb_irs(0, Rc, Rs, a_eff_new, b, b_dot, alpha_sq, sigma2_s, T)
+        crb_old = compute_crb_irs(Rc, Rs, a_eff, b, b_dot, alpha_sq, sigma2_s, T)
+        crb_new = compute_crb_irs(Rc, Rs, a_eff_new, b, b_dot, alpha_sq, sigma2_s, T)
 
         history.append({"iter": k, "crb": crb_new})
         crb_change = abs(crb_new - crb_old) / (abs(crb_old) + 1e-15)
@@ -156,39 +154,65 @@ def ao_optimize(gamma_0, a_eff_init, h_eff_init, G, h_r, h_rc,
 
 
 # ========================================================================
-# 单场景扫描
+# 场景扫描（每个场景对应一种函数）
 # ========================================================================
-def irs_beam_align(h_r, G):
+def scan_baseline(gamma_0, h, a_dir, b, b_dot, alpha_sq):
     """
-    Align IRS phases to maximize signal toward target direction.
-
-    Sets each element's phase to compensate the BS→IRS and IRS→Target paths,
-    making all N reflected signals add coherently at the target.
-
-    v_align[n] = exp(-j * (angle(G[n,0]) + angle(h_r[0,n])))
-
-    Args:
-        h_r: IRS→Target channel (1×N)
-        G: BS→IRS channel (N×Mt)
-
-    Returns:
-        v_align: Phase shift vector (N,) with |v| = 1
+    Baseline: no IRS, direct LoS for both sensing and communication.
+    Uses SCA directly (no IRS means no alternating optimization needed).
     """
-    G_ref = G[:, 0]  # use first BS antenna as phase reference
-    v = np.exp(-1j * (np.angle(h_r.flatten()) + np.angle(G_ref)))
-    return v / (np.abs(v) + 1e-15)
+    Rc, Rs, info = solve_p4_sca(
+        gamma_0, h, a_dir, sigma2_c, sigma2_s,
+        P, Mt, Mr, b, b_dot, alpha_sq
+    )
+    if Rc is None:
+        return None, None, None, None
+    return Rc, Rs, a_dir, h
+
+
+def scan_nlos_with_irs(gamma_0, a_dir, h, G, h_r, h_rc, b, b_dot, alpha_sq):
+    """
+    NLoS + IRS: direct path blocked, only IRS reflection path.
+    No AO needed — beam-align IRS phases (closed form), then single SCA.
+    """
+    v = irs_beam_align(h_r, G)
+    a_eff = compute_effective_a(a_dir, G, h_r, v, direct_blocked=True)
+    h_eff = compute_effective_h(h, G, h_rc, v)
+
+    Rc, Rs, info = solve_p4_sca(
+        gamma_0, h_eff, a_eff, sigma2_c, sigma2_s,
+        P, Mt, Mr, b, b_dot, alpha_sq
+    )
+    if Rc is None:
+        return None, None, None, None
+    return Rc, Rs, a_eff, h_eff
+
+
+def scan_los_with_irs(gamma_0, a_dir, h, G, h_r, h_rc, b, b_dot, alpha_sq, N_irs):
+    """
+    LoS + IRS: both direct and IRS paths exist.
+    Full AO (alternating between SCA beamforming and SDR IRS optimization).
+    """
+    a_eff_init = compute_effective_a(a_dir, G, h_r, np.ones(N_irs, dtype=complex))
+    h_eff_init = compute_effective_h(h, G, h_rc, np.ones(N_irs, dtype=complex))
+
+    Rc, Rs, theta_opt, info = ao_optimize(
+        gamma_0, a_eff_init, h_eff_init, G, h_r, h_rc,
+        b, b_dot, alpha_sq, sigma2_c, sigma2_s,
+        P, Mt, Mr, T, N_irs,
+        direct_blocked=False, a_dir=a_dir
+    )
+    if Rc is None:
+        return None, None, None, None
+
+    a_eff = compute_effective_a(a_dir, G, h_r, theta_opt)
+    h_eff = compute_effective_h(h, G, h_rc, theta_opt)
+    return Rc, Rs, a_eff, h_eff
 
 
 def scan_scenario(label, use_irs, N_irs_scan, geo, ch, irs_ch,
                   direct_blocked=False, npts_override=None):
-    """
-    Run SINR sweep for one scenario.
-
-    Args:
-        use_irs: If True, optimize IRS phases via AO
-        N_irs_scan: IRS element count (ignored if use_irs=False)
-        direct_blocked: If True, BS→Target LoS is blocked
-    """
+    """Run SINR sweep over gamma_0 for one scenario."""
     print(f"\n--- Scenario: {label} ---")
 
     if use_irs:
@@ -206,66 +230,26 @@ def scan_scenario(label, use_irs, N_irs_scan, geo, ch, irs_ch,
     gamma_0_dB_vals = np.linspace(gamma_0_dB_min, gamma_0_dB_max, npts)
     results = []
 
-    # NLoS with no IRS — print expected result
-    if direct_blocked and not use_irs:
-        print(f"  (Direct path blocked, no IRS — no sensing path, expected 0 feasible)")
-        results.append((0.0, None, None))
-
-    use_irst = use_irs
     for g0_dB in gamma_0_dB_vals:
         gamma_0 = 10**(g0_dB / 10)
 
-        if use_irst:
-            if direct_blocked:
-                # NLoS: IRS beam-align + SCA (fast, no AO iteration)
-                v = irs_beam_align(h_r, G)
-                a_eff = compute_effective_a(a_dir, G, h_r, v,
-                                            direct_blocked=True)
-                h_eff = compute_effective_h(h, G, h_rc, v)
-                Rc, Rs, info = solve_p4_sca(
-                    gamma_0, h_eff, a_eff, sigma2_c, sigma2_s,
-                    P, Mt, Mr, b, b_dot, alpha_sq
-                )
-                if Rc is None:
-                    results.append((gamma_0, None, None))
-                    continue
-            else:
-                # LoS: full AO
-                a_eff_init = compute_effective_a(a_dir, G, h_r,
-                                                  np.ones(N_irs_scan, dtype=complex))
-                h_eff_init = compute_effective_h(h, G, h_rc,
-                                                  np.ones(N_irs_scan, dtype=complex))
-                Rc, Rs, theta_opt, info = ao_optimize(
-                    gamma_0, a_eff_init, h_eff_init, G, h_r, h_rc,
-                    b, b_dot, alpha_sq, sigma2_c, sigma2_s,
-                    P, Mt, Mr, T, N_irs_scan,
-                    direct_blocked=False, a_dir=a_dir
-                )
-                if Rc is None:
-                    results.append((gamma_0, None, None))
-                    continue
-                a_eff = compute_effective_a(a_dir, G, h_r, theta_opt)
-                h_eff = compute_effective_h(h, G, h_rc, theta_opt)
+        if direct_blocked and not use_irs:
+            # NLoS without IRS: no sensing path at all
+            results.append((gamma_0, None, None))
+            continue
+        elif use_irs and direct_blocked:
+            Rc, Rs, a_eff, h_eff = scan_nlos_with_irs(gamma_0, a_dir, h, G, h_r, h_rc, b, b_dot, alpha_sq)
+        elif use_irs and not direct_blocked:
+            Rc, Rs, a_eff, h_eff = scan_los_with_irs(gamma_0, a_dir, h, G, h_r, h_rc, b, b_dot, alpha_sq, N_irs_scan)
         else:
-            # No IRS — baseline
-            if direct_blocked:
-                # NLoS without IRS = no sensing path → infeasible
-                results.append((gamma_0, None, None))
-                continue
+            Rc, Rs, a_eff, h_eff = scan_baseline(gamma_0, h, a_dir, b, b_dot, alpha_sq)
 
-            Rc, Rs, info = solve_p4_sca(
-                gamma_0, h, a_dir, sigma2_c, sigma2_s,
-                P, Mt, Mr, b, b_dot, alpha_sq
-            )
-            if Rc is None:
-                results.append((gamma_0, None, None))
-                continue
-
-            a_eff = a_dir
-            h_eff = h
+        if Rc is None:
+            results.append((gamma_0, None, None))
+            continue
 
         rate, sinr = compute_rate_irs(Rc, Rs, h_eff, sigma2_c)
-        crb = compute_crb_irs(0, Rc, Rs, a_eff, b, b_dot, alpha_sq, sigma2_s, T)
+        crb = compute_crb_irs(Rc, Rs, a_eff, b, b_dot, alpha_sq, sigma2_s, T)
         results.append((gamma_0, crb, rate))
 
     # Parse results
@@ -276,7 +260,7 @@ def scan_scenario(label, use_irs, N_irs_scan, geo, ch, irs_ch,
 
     g_arr, c_arr, r_arr = zip(*valid)
     data = {"gamma": np.array(g_arr), "crb": np.array(c_arr), "rate": np.array(r_arr)}
-    print(f"  Feasible points: {len(valid)}/{N_gamma}, "
+    print(f"  Feasible points: {len(valid)}/{npts}, "
           f"CRB range: [{c_arr[-1]:.3e}, {c_arr[0]:.3e}]")
     return data
 
@@ -286,14 +270,11 @@ def scan_scenario(label, use_irs, N_irs_scan, geo, ch, irs_ch,
 # ========================================================================
 def main():
     print("=" * 60)
-    print("IRS-assisted Bistatic ISAC — Scenario Comparison")
+    print("IRS-assisted Bistatic ISAC -- Scenario Comparison")
     print("=" * 60)
     np.random.seed(SEED)
 
-    # Init all shared geometry and channels
     geo, ch = init_geometry_and_channels()
-
-    # Init IRS channels for N=16, N=32
     irs_ch_16 = generate_irs_channels(16, geo)
     irs_ch_32 = generate_irs_channels(32, geo)
 
@@ -302,9 +283,6 @@ def main():
     print(f"d_br={geo['d_br']:.1f}m, d_rt={geo['d_rt']:.1f}m")
     print(f"|alpha|^2 = {ch['alpha_sq']:.3e}")
 
-    # ===== Run all scenarios =====
-    # NLoS scenarios are slower (weak sensing → SDR/SCA takes longer)
-    # so we run them with fewer SINR points
     nlos_N_gamma = max(10, N_gamma // 4)
 
     scenarios = [
@@ -322,12 +300,11 @@ def main():
                              direct_blocked=blocked, npts_override=npts)
         all_data[label] = data
 
-    # ===== Save and plot =====
+    # Save data
     out_dir = os.path.join(os.path.dirname(__file__), 'results')
     os.makedirs(out_dir, exist_ok=True)
     timestamp = time.strftime('%Y%m%d_%H%M%S')
 
-    # Combined save
     save_dict = {}
     for label, data in all_data.items():
         if data is not None:
@@ -340,7 +317,7 @@ def main():
     np.savez(data_path, **save_dict)
     print(f"\nData saved to: {data_path}")
 
-    # Combined plot: all curves in one figure
+    # Plot
     irs_curves = []
     irs_labels = []
     for lbl in ["NLoS, IRS N=16", "NLoS, IRS N=32", "LoS, IRS N=32"]:
@@ -352,7 +329,8 @@ def main():
         all_data.get("LoS, no IRS"),
         irs_curves,
         labels=irs_labels,
-        save_path=os.path.join(out_dir, f'comparison_all_{timestamp}.png')
+        save_path=os.path.join(out_dir, f'comparison_all_{timestamp}.png'),
+        use_log=True
     )
 
     print("Done.")
