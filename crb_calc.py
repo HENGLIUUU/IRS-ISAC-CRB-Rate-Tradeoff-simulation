@@ -157,4 +157,4 @@ def compute_crb_irs(theta, Rc, Rs, a_eff, b, b_dot, alpha_sq, sigma2_s, T):
     """
     # Delegate to existing Case 2 CRB with a_eff in place of a
     return compute_crb_case2(theta, Rc, Rs, a_eff, b, b_dot,
-                             alpha_sq, sigma2_s, T)
+                             alpha_sq, sigma2_s, T).item()

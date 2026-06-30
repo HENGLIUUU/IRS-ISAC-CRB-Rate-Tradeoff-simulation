@@ -75,4 +75,5 @@ def compute_rate_irs(Rc, Rs, h_eff, sigma2_c):
         rate: Achievable rate (bps/Hz)
         sinr: SINR (linear scale)
     """
-    return compute_rate_case2(Rc, Rs, h_eff, sigma2_c)
+    rate, sinr = compute_rate_case2(Rc, Rs, h_eff, sigma2_c)
+    return rate.item(), sinr.item()
