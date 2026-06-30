@@ -101,7 +101,7 @@ def plot_comparison(data1=None, data2=None, data3=None, save_path='comparison.pn
     plt.pause(0.5)
 
 
-def plot_irs_comparison(data_no_irs, data_irs_list, labels=None, save_path='irs_comparison.png'):
+def plot_irs_comparison(data_no_irs, data_irs_list, labels=None, save_path='irs_comparison.png', use_log=False):
     """
     Compare CRB-Rate tradeoff with and without IRS.  [new]
 
@@ -110,6 +110,7 @@ def plot_irs_comparison(data_no_irs, data_irs_list, labels=None, save_path='irs_
         data_irs_list: list of dicts, each with 'rate', 'crb', 'gamma'
         labels: list of legend labels for each IRS config
         save_path: output path
+        use_log: if True, use log scale for CRB y-axis (for multi-order-of-magnitude comparison)
     """
     import matplotlib.pyplot as plt
 
@@ -138,14 +139,19 @@ def plot_irs_comparison(data_no_irs, data_irs_list, labels=None, save_path='irs_
     ax1.set_title('CRB-Rate Tradeoff: IRS vs Baseline')
     ax1.grid(True, alpha=0.3)
     ax1.legend()
-    ax1.ticklabel_format(style='sci', axis='y', scilimits=(0, 0))
+    if use_log:
+        ax1.set_yscale('log')
+        ax2.set_yscale('log')
+    else:
+        ax1.ticklabel_format(style='sci', axis='y', scilimits=(0, 0))
 
     ax2.set_xlabel('SINR Threshold γ₀ (dB)')
     ax2.set_ylabel('CRB for DoA Estimation (rad²)')
     ax2.set_title('CRB vs SINR Constraint')
     ax2.grid(True, alpha=0.3)
     ax2.legend()
-    ax2.ticklabel_format(style='sci', axis='y', scilimits=(0, 0))
+    if not use_log:
+        ax2.ticklabel_format(style='sci', axis='y', scilimits=(0, 0))
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')

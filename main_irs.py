@@ -340,28 +340,19 @@ def main():
     np.savez(data_path, **save_dict)
     print(f"\nData saved to: {data_path}")
 
-    # Plot 1: LoS comparison (no IRS vs IRS N=32 LoS)
-    plot_irs_comparison(
-        all_data.get("LoS, no IRS"),
-        [all_data.get("LoS, IRS N=32")],
-        labels=["IRS N=32 (LoS)"],
-        save_path=os.path.join(out_dir, f'comparison_LoS_{timestamp}.png')
-    )
-
-    # Plot 2: NLoS comparison (all NLoS scenarios)
-    nlos_labels = []
-    nlos_data = []
-    for lbl in ["NLoS, no IRS", "NLoS, IRS N=16", "NLoS, IRS N=32"]:
+    # Combined plot: all curves in one figure
+    irs_curves = []
+    irs_labels = []
+    for lbl in ["NLoS, IRS N=16", "NLoS, IRS N=32", "LoS, IRS N=32"]:
         if all_data.get(lbl) is not None:
-            nlos_data.append(all_data[lbl])
-            nlos_labels.append(lbl)
+            irs_curves.append(all_data[lbl])
+            irs_labels.append(lbl)
 
-    savefig_path = os.path.join(out_dir, f'comparison_NLoS_{timestamp}.png')
     plot_irs_comparison(
         all_data.get("LoS, no IRS"),
-        nlos_data,
-        labels=nlos_labels,
-        save_path=savefig_path
+        irs_curves,
+        labels=irs_labels,
+        save_path=os.path.join(out_dir, f'comparison_all_{timestamp}.png')
     )
 
     print("Done.")
