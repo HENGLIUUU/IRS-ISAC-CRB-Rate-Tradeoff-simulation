@@ -38,15 +38,12 @@ python run_position_scan.py
 
 扫描原理：`||a_eff||² ∝ L(d_br) × L(d_rt)`，最小化 `d_br × d_rt` 等价于最大化有效信道增益。将 `config.py` 中 `pos_irs` 设为输出的最优位置即可。
 
-## 场景说明
-
-| 场景 | IRS | Target 直射 | 作用 |
-|:---|:---:|:---:|:---|
 ## 场景
 
-|      场景     | IRS | Target 直射 |
-| LoS baseline  | 无   |    ✅     |
-| NLoS+IRS N=16 | N=16 |    ❌     |
+| 场景 | IRS | Target 直射 |
+|:---|:---:|:---:|
+| LoS baseline | 无 | ✅ |
+| NLoS+IRS N=16 | N=16 | ❌ |
 | NLoS+IRS N=32 | N=32 |    ❌     |
 | NLoS+IRS N=64 | N=64 |    ❌     |
 | NLoS+IRS N=128| N=128|    ❌     |
@@ -83,7 +80,7 @@ python run_position_scan.py
                         ↓
 ② 场景循环（7 个场景: LoS / NLoS+IRS N=16/32/64/128 / LoS+IRS N=32）
                         ↓
-③ γ₀ 扫描（80 个 SINR 阈值点）
+③ γ₀ 扫描（40 个 SINR 阈值点）
    for γ₀ in -10dB ~ 19dB:
        │
        ├─ LoS baseline → sca_solver.py（SCA 求 Rc,Rs）
@@ -116,7 +113,7 @@ python run_position_scan.py
 | `N_irs_list` | [16, 32, 64, 128] | IRS 单元数扫描 |
 | `pos_irs` | [190, 5] | IRS 部署位置（由 run_position_scan.py 扫出） |
 | `CAL_ALPHA` | 1e-32 | 目标信道校准因子（按原论文实验数据标定，相对对比不受影响） |
-| `N_gamma` | 100 | SINR 扫描点数 |
+| `N_gamma` | 40 | SINR 扫描点数 |
 
 ## 求解器警告说明
 
