@@ -33,7 +33,7 @@ def plot_irs_comparison(data_no_irs, data_irs_list, labels=None,
     # ---- NLoS+IRS curves: colored dashed lines ----
     nlos_idx = 0
     for i, d in enumerate(data_irs_list):
-        if d is None or (labels and "LoS+IRS" in labels[i]):
+        if d is None or (labels and labels[i].startswith("LoS+IRS")):
             continue
         s = np.argsort(d['rate'])
         style = LINE_STYLES["nlos_irs"][nlos_idx % len(LINE_STYLES["nlos_irs"])]
@@ -44,7 +44,7 @@ def plot_irs_comparison(data_no_irs, data_irs_list, labels=None,
 
     # ---- LoS+IRS: markers on solid line to show overlap with baseline ----
     for i, d in enumerate(data_irs_list):
-        if d is None or not (labels and "LoS+IRS" in labels[i]):
+        if d is None or not (labels and labels[i].startswith("LoS+IRS")):
             continue
         s = np.argsort(d['rate'])
         lbl = labels[i]
