@@ -26,6 +26,8 @@ python run_position_scan.py
 
 结果保存在 `results/` 目录下（`.npz` 数据 + `.png` 曲线图）。
 
+![CRB-Rate Tradeoff Comparison](results/comparison_all_20260701_181216.png)
+
 ## IRS 位置优化
 
 当前 IRS 部署在 `pos_irs = [190, 5]`（靠近 Target），这个位置由 `run_position_scan.py` 基于 `||a_eff||²` 代理指标扫描确定（~3s 完成）。
