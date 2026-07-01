@@ -16,11 +16,10 @@ Case 2 波束赋形优化求解器 (SCA)
 
 import numpy as np
 import cvxpy as cp
-from cvxpy.error import SolverError
 
 
 def solve_p4_sca(gamma_0, h, a, sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_sq,
-                 max_iter=50, tol=1e-4):
+                 max_iter=50, tol=1e-4, Rc_init=None, Rs_init=None):
     """
     Solve Problem (P4) using SCA  [Algorithm 1].
 
@@ -70,21 +69,25 @@ def solve_p4_sca(gamma_0, h, a, sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_s
     M_mat = np.outer(a_flat.conj(), a_flat)
 
     # ========================================================================
-    # Initialization: ensure feasible
+    # Initialization: use warm start if provided, otherwise compute feasible point
     # ========================================================================
-    a_norm = a_flat / np.linalg.norm(a_flat)
-    h_a_corr_sq = np.abs(h_tilde.conj() @ a_norm)**2
-
-    denom = h_norm_sq + gamma_0 * h_a_corr_sq
-    numer = gamma_0 * (P * h_a_corr_sq + 1)
-    Rc_power = min(numer / denom, P * 0.95)  # cap at 95%: leave 5% power for Rs sensing even at high gamma_0
-    Rc = Rc_power * np.outer(h_flat, h_flat.conj()) / np.linalg.norm(h_flat)**2
-
-    Rs_power = P - Rc_power
-    if Rs_power <= 0:
-        Rs = np.zeros((Mt, Mt), dtype=complex)
+    if Rc_init is not None and Rs_init is not None:
+        Rc = Rc_init.copy()
+        Rs = Rs_init.copy()
     else:
-        Rs = Rs_power * np.outer(a_norm, a_norm.conj())
+        a_norm = a_flat / np.linalg.norm(a_flat)
+        h_a_corr_sq = np.abs(h_tilde.conj() @ a_norm)**2
+
+        denom = h_norm_sq + gamma_0 * h_a_corr_sq
+        numer = gamma_0 * (P * h_a_corr_sq + 1)
+        Rc_power = min(numer / denom, P * 0.95)
+        Rc = Rc_power * np.outer(h_flat, h_flat.conj()) / np.linalg.norm(h_flat)**2
+
+        Rs_power = P - Rc_power
+        if Rs_power <= 0:
+            Rs = np.zeros((Mt, Mt), dtype=complex)
+        else:
+            Rs = Rs_power * np.outer(a_norm, a_norm.conj())
 
     # ========================================================================
     # SCA iteration
@@ -118,12 +121,7 @@ def solve_p4_sca(gamma_0, h, a, sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_s
         ]
 
         prob = cp.Problem(cp.Maximize(obj), constraints)
-        try:
-            prob.solve(solver=cp.SCS, verbose=False, eps=1e-5, max_iters=10000)
-        except SolverError:
-            if k == 0:
-                return Rc, Rs, {"status": "solver_error_at_init", "iters": 0}
-            break
+        prob.solve(solver=cp.SCS, verbose=False, eps=1e-5, max_iters=10000)
 
         if prob.status not in ("optimal", "optimal_inaccurate"):
             if k == 0:

@@ -125,7 +125,7 @@ def generate_irs_bs_channel(Mt, N_irs, d_br, phi_br,
         N_irs: IRS elements
         d_br: BS-IRS distance (m)
         phi_br: IRS direction from BS (rad)
-        K0, alpha0, d0: Path loss parameters (Paper 4 Eq.63)
+        K0, alpha0, d0: Path loss parameters (CRB-Rate Tradeoff Eq.63)
 
     Returns:
         G: BS→IRS channel (N_irs × Mt)
@@ -168,7 +168,7 @@ def generate_irs_cu_channel(N_irs, d_rc, phi_rc, Kc=1.0,
     """
     Generate IRS → CU channel h_rc ∈ ℂ^{1×N_irs}  [new]
 
-    Rician fading (similar to BS→CU, Paper 4 Eq.62).
+    Rician fading (similar to BS→CU, CRB-Rate Tradeoff Eq.62).
 
     Args:
         N_irs: IRS elements
@@ -244,22 +244,25 @@ def irs_beam_align(h_r, G):
     return v / (np.abs(v) + 1e-15)
 
 
-def compute_effective_h(h, G, h_rc, v):
+def compute_effective_h(h, G, h_rc, v, direct_blocked=False):
     """
     Compute effective CU channel vector  [new]
 
-    h_eff(Θ) = h + (h_rc @ Θ @ G)^T
-             = h + G^T @ (h_rc^T * v)
+    h_eff(Θ) = h + (h_rc @ Θ @ G)^T   (LoS: direct + IRS)
+             = (h_rc @ Θ @ G)^T         (NLoS: IRS only, direct blocked)
 
     Args:
         h: Direct-path CU channel (Mt×1)
         G: BS→IRS channel (N_irs×Mt)
         h_rc: IRS→CU channel (1×N_irs)
         v: IRS phase shift vector (N_irs,)
+        direct_blocked: If True, remove direct BS→CU path
 
     Returns:
         h_eff: Effective CU channel (Mt×1)
     """
     h_rc_flat = h_rc.flatten()  # (N,)
     irs_path = G.T @ (h_rc_flat * v)  # (Mt,)
+    if direct_blocked:
+        return irs_path.reshape(-1, 1)
     return (h.flatten() + irs_path).reshape(-1, 1)  # Mt×1

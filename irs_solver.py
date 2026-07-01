@@ -20,6 +20,9 @@ IRS 相移优化求解器 — SDR (Semidefinite Relaxation)
 import numpy as np
 import cvxpy as cp
 from channels import compute_effective_a, compute_effective_h
+from config import AO_MAX_ITER, AO_TOL, SDR_TRIALS
+from sca_solver import solve_p4_sca
+from crb import compute_crb_irs
 
 
 def _build_a_eff_linear_map(G, h_r, N_irs, Mt):
@@ -303,3 +306,56 @@ def _compute_crb_given_aeff(a_eff, Rc, Rs,
         return 1e10
 
     return sigma2_s / (2 * T * alpha_sq * F)
+
+
+# ========================================================================
+# AO 交替优化框架
+# ========================================================================
+def ao_optimize(gamma_0, a_eff_init, h_eff_init, G, h_r, h_rc,
+                b, b_dot, alpha_sq,
+                sigma2_c, sigma2_s, P, Mt, Mr, T, N_irs,
+                direct_blocked=False, a_dir=None):
+    """
+    Alternating optimization for IRS-assisted ISAC.
+
+    Iterates between:
+      Step 1: Fix Theta, optimize R_c, R_s (SCA)
+      Step 2: Fix R_c, R_s, optimize Theta (SDR)
+    """
+    v = np.ones(N_irs, dtype=complex)
+    a_eff = a_eff_init.copy()
+    h_eff = h_eff_init.copy()
+
+    history = []
+
+    for k in range(AO_MAX_ITER):
+        # Step 1: Fix Theta, optimize R_c, R_s
+        Rc, Rs, info_sca = solve_p4_sca(gamma_0, h_eff, a_eff, sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_sq)
+        if Rc is None:
+            return None, None, None, {"status": f"SCA failed at AO iter {k}"}
+
+        # Step 2: Fix R_c, R_s, optimize Theta
+        a_sdr = a_dir if a_dir is not None and not direct_blocked else np.zeros(Mt, dtype=complex)
+        v_new, info_irs = solve_irs_sdr(
+            Rc, Rs, a_sdr, h_eff, G, h_r, h_rc, b, b_dot, alpha_sq,
+            sigma2_c, sigma2_s, gamma_0, T, N_irs, Mt, trials=SDR_TRIALS
+        )
+        if v_new is None:
+            v_new = v  # SDR failed -- keep current
+
+        # Update effective channels
+        a_eff_new = compute_effective_a(a_dir if a_dir is not None else a_eff, G, h_r, v_new, direct_blocked=direct_blocked)
+        h_eff_new = compute_effective_h(h_eff, G, h_rc, v_new)
+
+        # Convergence check via CRB change
+        crb_old = compute_crb_irs(Rc, Rs, a_eff, b, b_dot, alpha_sq, sigma2_s, T)
+        crb_new = compute_crb_irs(Rc, Rs, a_eff_new, b, b_dot, alpha_sq, sigma2_s, T)
+
+        history.append({"iter": k, "crb": crb_new})
+        crb_change = abs(crb_new - crb_old) / (abs(crb_old) + 1e-15)
+        v, a_eff, h_eff = v_new, a_eff_new, h_eff_new
+
+        if crb_change < AO_TOL and k > 0:
+            break
+
+    return Rc, Rs, v, {"status": f"converged in {k+1} AO iters", "history": history}

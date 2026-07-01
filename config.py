@@ -13,14 +13,15 @@ Mr = 32            # Sensing RX antennas
 T  = 1024          # Number of symbols
 
 # ===== IRS parameters =====
-N_irs = 16         # IRS reflecting elements (start at 16, can go to 32)
+N_irs_list = [16, 32, 64, 128]  # IRS reflecting elements to scan
+N_irs = 16                       # default value
 
 # ===== IRS positions (x, y) =====
 # BS: (0, 0), Target: (200, 0), Sensing RX: (400, 0)
 pos_bs     = np.array([0.0, 0.0])
 pos_target = np.array([200.0, 0.0])
 pos_rx     = np.array([400.0, 0.0])
-pos_irs    = np.array([190.0, 5.0])   # optimized: near target for NLoS sensing
+pos_irs    = np.array([190.0, 5.0])     # IRS position (near target for NLoS)
 
 # ===== Power & Noise =====
 P_dBm      = 30.0
@@ -35,19 +36,21 @@ theta_target = 0.0   # Target DoA (rad)
 phi_target   = 0.0   # BS->Target direction (rad)
 phi_cu       = 0.3   # BS->CU direction (rad)
 
-# ===== Path loss (Paper 4 Eq.63) =====
+# ===== Path loss (CRB-Rate Tradeoff Eq.63) =====
 K0     = -30     # Path loss at d0 (dB)
 alpha0 = 2.5     # Path loss exponent
 d0     = 1.0     # Reference distance (m)
 
-# ===== Target channel (Paper 4 Eq.6) =====
-CAL_ALPHA = 1.0e-32   # Calibration factor for |alpha|^2
+# ===== Target channel (CRB-Rate Tradeoff Eq.6) =====
+CAL_ALPHA = 1.0e-32   # Calibration factor for |alpha|^2 (LoS scenario)
+                        # NLoS+IRS 信号经 IRS 反射，前向路径已在 a_eff 中
+                        # |alpha|² 只应含返回路径 L(Target→RX)
 
-# ===== CU channel (Paper 4 Eq.62) =====
+# ===== CU channel (CRB-Rate Tradeoff Eq.62) =====
 Kc = 1.0        # Rician K-factor for BS->CU
 
 # ===== SINR sweep =====
-N_gamma        = 40
+N_gamma        = 40     # SINR sweep points (-10dB ~ 19dB)
 gamma_0_dB_min = -10.0
 gamma_0_dB_max = 19.0
 
@@ -59,5 +62,5 @@ AO_MAX_ITER = 20
 AO_TOL      = 1e-4
 
 # ===== Reproducibility =====
-SEED       = 0      # Paper 4 uses h_seed=46 for channel gen
-SEED_CHANNEL = 46   # Keep Paper 4's channel seed for fair comparison
+SEED       = 0      # CRB-Rate Tradeoff uses h_seed=46 for channel gen
+SEED_CHANNEL = 46   # Same seed for fair comparison
