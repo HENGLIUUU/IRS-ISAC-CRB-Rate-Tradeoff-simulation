@@ -10,6 +10,7 @@
 
 import numpy as np
 from config import (
+    A_MAX,
     Mt, Mr, T, P, sigma2_c, sigma2_s,
     N_gamma, gamma_0_dB_min, gamma_0_dB_max,
 )
@@ -21,6 +22,7 @@ from irs_solver import solve_irs_sdr, ao_optimize
 
 
 def scan_scenario(label, use_irs, N_irs_scan, geo, ch, irs_ch,
+                  active=False,
                   direct_blocked=False, npts_override=None):
     """
     Run SINR sweep over gamma_0 for one scenario.
@@ -49,6 +51,8 @@ def scan_scenario(label, use_irs, N_irs_scan, geo, ch, irs_ch,
         if use_irs and direct_blocked:
             # NLoS + IRS: beam-align phases → single SCA
             v = irs_beam_align(irs_ch["h_r"], irs_ch["G"])
+            if active:
+                v = v * A_MAX  # Active IRS: amplify to max gain
             a_eff = compute_effective_a(a_dir, irs_ch["G"], irs_ch["h_r"], v, direct_blocked=True)
             h_eff = compute_effective_h(h, irs_ch["G"], irs_ch["h_rc"], v)
             Rc, Rs, info = solve_p4_sca(gamma_0, h_eff, a_eff,
@@ -64,7 +68,7 @@ def scan_scenario(label, use_irs, N_irs_scan, geo, ch, irs_ch,
             Rc, Rs, theta_opt, info = ao_optimize(
                 gamma_0, a_init, h_init, irs_ch["G"], irs_ch["h_r"], irs_ch["h_rc"],
                 b, b_dot, alpha_sq, sigma2_c, sigma2_s, P, Mt, Mr, T, N_irs_scan,
-                direct_blocked=False, a_dir=a_dir)
+                direct_blocked=False, a_dir=a_dir, active=active)
             if Rc is not None:
                 a_eff = compute_effective_a(a_dir, irs_ch["G"], irs_ch["h_r"], theta_opt)
                 h_eff = compute_effective_h(h, irs_ch["G"], irs_ch["h_rc"], theta_opt)

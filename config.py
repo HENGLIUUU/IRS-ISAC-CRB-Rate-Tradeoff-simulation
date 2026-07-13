@@ -16,6 +16,13 @@ T  = 1024          # Number of symbols
 N_irs_list = [16, 32, 64, 128]  # IRS reflecting elements to scan
 N_irs = 16                       # default value
 
+# ===== Active IRS parameters (from Paper 7) =====
+A_MAX = 8.0          # Maximum amplification gain (linear), ~18dB
+P_RIS_dBm = 10.0     # RIS amplification power budget (dBm)
+P_RIS = 10**((P_RIS_dBm - 30)/10)  # RIS power budget (linear, Watts)
+SIGMA2_RIS_dBm = -80.0   # RIS amplification noise power (dBm)
+SIGMA2_RIS = 10**((SIGMA2_RIS_dBm - 30)/10)
+
 # ===== IRS positions (x, y) =====
 # BS: (0, 0), Target: (200, 0), Sensing RX: (400, 0)
 pos_bs     = np.array([0.0, 0.0])
