@@ -51,3 +51,7 @@ plot_irs.py         画图
 - CRB-Rate Tradeoff for Bistatic ISAC, Song et al., IEEE TWC 2026
 - CRB Optimization for Active RIS-Empowered ISAC Systems, Zhu et al., IEEE TWC 2024 (arXiv:2309.09207)
 - An overview on IRS-enabled sensing and communications for 6G, Song et al., Sci. China Inf. Sci. 2025
+
+---
+
+> 本仓库为学术研究项目，代码已标注参考文献来源。如有错误或问题欢迎提 Issue。
