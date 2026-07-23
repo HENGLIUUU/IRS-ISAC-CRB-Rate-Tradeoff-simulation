@@ -28,50 +28,51 @@ BS -> IRS -> Target -> Sensing RX
 ## Model
 
 BS 发射通信信号与确定性感知信号，其协方差分别为
-\(\mathbf R_c\) 和 \(\mathbf R_s\)：
+$\mathbf R_c$ 和 $\mathbf R_s$：
 
-\[
+$$
 \operatorname{tr}(\mathbf R_c+\mathbf R_s)\le P.
-\]
+$$
 
-通信端采用列信道约定 \(y_c=\mathbf h_{\rm eff}^H\mathbf x+n_c\)：
+通信端采用列信道约定 $y_c=\mathbf h_{\rm eff}^H\mathbf x+n_c$：
 
-\[
+$$
 \mathbf h_{\rm eff}
 =\mathbf h+\mathbf G^H\operatorname{diag}(\mathbf v^*)\mathbf h_{rc}.
-\]
+$$
 
 Active IRS 放大噪声独立进入 SINR 分母：
 
-\[
+$$
 \gamma_c=
 \frac{\mathbf h_{\rm eff}^H\mathbf R_c\mathbf h_{\rm eff}}
 {\mathbf h_{\rm eff}^H\mathbf R_s\mathbf h_{\rm eff}
-+\sigma_c^2+\sigma_I^2\|\operatorname{diag}(\mathbf v^*)\mathbf h_{rc}\|^2}.
-\]
++\sigma_c^2+\sigma_I^2
+\left\|\operatorname{diag}(\mathbf v^*)\mathbf h_{rc}\right\|^2}.
+$$
 
 感知端保留 *CRB-Rate Tradeoff for Bistatic ISAC* 的
-\(\mathbf H=\alpha\mathbf b\mathbf a^T\) 约定：
+$\mathbf H=\alpha\mathbf b\mathbf a^T$ 约定：
 
-\[
+$$
 \mathbf a_{\rm eff}
 =\mathbf a_{\rm dir}+\mathbf G^T\operatorname{diag}(\mathbf v)\mathbf h_r.
-\]
+$$
 
 因此目标方向功率是
-\(\mathbf a_{\rm eff}^T\mathbf R\mathbf a_{\rm eff}^*\)，不是
-\(\mathbf a_{\rm eff}^H\mathbf R\mathbf a_{\rm eff}\)。
+$\mathbf a_{\rm eff}^T\mathbf R\mathbf a_{\rm eff}^*$，不是
+$\mathbf a_{\rm eff}^H\mathbf R\mathbf a_{\rm eff}$。
 
 Active IRS 还满足
 
-\[
-|v_n|\le A_{\max},
+$$
+\lvert v_n\rvert\le A_{\max},
 \quad
-\sum_n|v_n|^2
+\sum_n\lvert v_n\rvert^2
 \left([\mathbf G(\mathbf R_c+\mathbf R_s)\mathbf G^H]_{n,n}
 +\sigma_I^2\right)
 \le P_{\rm RIS}.
-\]
+$$
 
 
 ## Features
@@ -80,7 +81,7 @@ Active IRS 还满足
 - Passive/Active IRS 单程前向信道；
 - CU 端 Active-IRS 放大噪声；
 - Active-IRS 单元幅度与总输出功率约束；
-- SCA 优化 \(\mathbf R_c,\mathbf R_s\)；
+- SCA 优化 $\mathbf R_c,\mathbf R_s$；
 - SDR/AO 优化 IRS 系数，并独立复核恢复解的可行性；
 - 相位对齐快速基线与可重复的 SINR 扫描；
 - 每次运行保存数据、图和完整参数元数据。
@@ -132,11 +133,11 @@ python paper_figures.py
 |---|---|
 | Fig. 1 | 单程 Active-IRS 双站 ISAC 系统模型 |
 | Fig. 2 | Passive/Active IRS 的 SCA 收敛曲线 |
-| Fig. 3(a) | \(N=40\) 时的核心 CRB-rate 区域 |
+| Fig. 3(a) | $N=40$ 时的核心 CRB-rate 区域 |
 | Fig. 3(b) | 固定 IRS 类型下不同阵元数的 CRB-rate 区域 |
 | Fig. 4 | CRB 随通信 SINR 门限的变化 |
 | Fig. 5 | Passive/Active IRS 在不同 SINR 下的阵元数缩放 |
-| Fig. 6(a)/(b) | CRB 与 IRS 输出功率随 \(A_{\max}\) 的变化 |
+| Fig. 6(a)/(b) | CRB 与 IRS 输出功率随 $A_{\max}$ 的变化 |
 | Fig. 7 | CRB 随 Active-IRS 功率预算的变化 |
 | Fig. 8 | CRB 与 CU 噪声功率比的双纵轴噪声敏感性图 |
 | Fig. 10 | 相同 BS 功率与相同系统总功率两种比较口径 |
@@ -152,20 +153,20 @@ python paper_figures.py
 
 | Parameter | Symbol | Default | Unit |
 |---|---:|---:|---|
-| BS antennas | \(M_t\) | 32 | elements |
-| Sensing RX antennas | \(M_r\) | 32 | elements |
-| Coherent samples | \(T\) | 1024 | symbols |
-| BS transmit power | \(P\) | 30 | dBm |
-| Active-IRS power budget | \(P_{\rm RIS}\) | 10 | dBm |
-| Maximum IRS amplitude | \(A_{\max}\) | 8 | linear |
-| IRS noise per element | \(\sigma_I^2\) | -80 | dBm |
-| CU receiver noise | \(\sigma_c^2\) | -80 | dBm |
-| Sensing RX noise | \(\sigma_s^2\) | -80 | dBm |
-| Path-loss reference | \(K_0\) | -30 | dB |
-| Path-loss exponent | \(\alpha_0\) | 2.5 | — |
-| Rician factor | \(K_c\) | 1 | linear |
-| IRS elements | \(N\) | 16, 32, 64, 128 | elements |
-| SINR threshold sweep | \(\gamma_0\) | -10 to 19 | dB |
+| BS antennas | $M_t$ | 32 | elements |
+| Sensing RX antennas | $M_r$ | 32 | elements |
+| Coherent samples | $T$ | 1024 | symbols |
+| BS transmit power | $P$ | 30 | dBm |
+| Active-IRS power budget | $P_{\rm RIS}$ | 10 | dBm |
+| Maximum IRS amplitude | $A_{\max}$ | 8 | linear |
+| IRS noise per element | $\sigma_I^2$ | -80 | dBm |
+| CU receiver noise | $\sigma_c^2$ | -80 | dBm |
+| Sensing RX noise | $\sigma_s^2$ | -80 | dBm |
+| Path-loss reference | $K_0$ | -30 | dB |
+| Path-loss exponent | $\alpha_0$ | 2.5 | — |
+| Rician factor | $K_c$ | 1 | linear |
+| IRS elements | $N$ | 16, 32, 64, 128 | elements |
+| SINR threshold sweep | $\gamma_0$ | -10 to 19 | dB |
 | Direct / IRS-CU seeds | — | 46 / 47 | — |
 
 主曲线使用 `MAIN_IRS_STRATEGY="alignment"`，默认功率比较口径为
@@ -208,7 +209,7 @@ docs/                 model guide and formula audit
 ## Interpretation limits
 
 - 主曲线默认是相位对齐基线，不是完整 AO 最优曲线。
-- 当前默认参数下 Active IRS 主要受 \(A_{\max}\) 限制；总功率约束和
+- 当前默认参数下 Active IRS 主要受 $A_{\max}$ 限制；总功率约束和
   放大噪声几乎不活跃，因此不能据此声称观察到了噪声-功率折中。
 - 第一遍 IRS 噪声经目标反射后的功率会被记录为诊断量，但在默认几何下
   远低于 sensing RX 热噪声，故 CRB 保留
