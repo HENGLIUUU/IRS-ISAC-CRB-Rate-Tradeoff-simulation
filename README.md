@@ -31,14 +31,14 @@ BS 发射通信信号与确定性感知信号，其协方差分别为
 $\mathbf R_c$ 和 $\mathbf R_s$：
 
 $$
-\operatorname{tr}(\mathbf R_c+\mathbf R_s)\le P.
+\mathrm{tr}(\mathbf R_c+\mathbf R_s)\le P.
 $$
 
 通信端采用列信道约定 $y_c=\mathbf h_{\rm eff}^H\mathbf x+n_c$：
 
 $$
 \mathbf h_{\rm eff}
-=\mathbf h+\mathbf G^H\operatorname{diag}(\mathbf v^*)\mathbf h_{rc}.
+=\mathbf h+\mathbf G^H\mathrm{diag}(\mathbf v^*)\mathbf h_{rc}.
 $$
 
 Active IRS 放大噪声独立进入 SINR 分母：
@@ -48,7 +48,7 @@ $$
 \frac{\mathbf h_{\rm eff}^H\mathbf R_c\mathbf h_{\rm eff}}
 {\mathbf h_{\rm eff}^H\mathbf R_s\mathbf h_{\rm eff}
 +\sigma_c^2+\sigma_I^2
-\left\|\operatorname{diag}(\mathbf v^*)\mathbf h_{rc}\right\|^2}.
+\left\|\mathrm{diag}(\mathbf v^*)\mathbf h_{rc}\right\|^2}.
 $$
 
 感知端保留 *CRB-Rate Tradeoff for Bistatic ISAC* 的
@@ -56,7 +56,7 @@ $\mathbf H=\alpha\mathbf b\mathbf a^T$ 约定：
 
 $$
 \mathbf a_{\rm eff}
-=\mathbf a_{\rm dir}+\mathbf G^T\operatorname{diag}(\mathbf v)\mathbf h_r.
+=\mathbf a_{\rm dir}+\mathbf G^T\mathrm{diag}(\mathbf v)\mathbf h_r.
 $$
 
 因此目标方向功率是
