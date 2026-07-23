@@ -212,6 +212,13 @@ docs/                 model guide and formula audit
 - 绝对 CRB 取决于目标 RCS、阵列增益和双站路径损耗假设；跨论文比较时
   应优先比较趋势与缩放规律。
 
+## Acknowledgments
+
+Development assistance was provided by Claude Code and OpenAI Codex for
+code review, debugging, documentation, and repository maintenance.
+All research decisions, model formulation, numerical results, and final
+responsibility belong to Huanyu Zhang.
+
 ## References
 
 1. *CRB-Rate Tradeoff for Bistatic ISAC*, IEEE TWC, 2026.
