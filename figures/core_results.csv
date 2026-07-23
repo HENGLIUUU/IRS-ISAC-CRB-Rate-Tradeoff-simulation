@@ -1,0 +1,4 @@
+﻿Scheme,CRB (rad$^2$),Rate (bps/Hz),IRS power (dBm),Max gain,Runtime (s)
+"LoS, no IRS",1.9891e-03,3.4594,-,-,4.476
+"NLoS, Passive IRS",1.8152e-01,3.4594,-,1.00,4.061
+"NLoS, Active IRS",2.8356e-03,3.4594,-6.26,8.00,4.644

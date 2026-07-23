@@ -1,2 +1,22 @@
+# Python
 __pycache__/
-CODE_GUIDE.md
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and editors
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Generated experiments and temporary files
+results/
+tmp/
+*.log
+
+# Local-only verification suite
+tests/
+local_validation/

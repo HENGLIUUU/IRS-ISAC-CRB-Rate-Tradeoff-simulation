@@ -16,12 +16,22 @@ T  = 1024          # Number of symbols
 N_irs_list = [16, 32, 64, 128]  # IRS reflecting elements to scan
 N_irs = 16                       # default value
 
-# ===== Active IRS parameters (from Paper 7) =====
+# ===== Active IRS parameters =====
 A_MAX = 8.0          # Maximum amplification gain (linear), ~18dB
 P_RIS_dBm = 10.0     # RIS amplification power budget (dBm)
 P_RIS = 10**((P_RIS_dBm - 30)/10)  # RIS power budget (linear, Watts)
 SIGMA2_RIS_dBm = -80.0   # RIS amplification noise power (dBm)
 SIGMA2_RIS = 10**((SIGMA2_RIS_dBm - 30)/10)
+
+# Main curves use the inexpensive closed-form phase-alignment baseline.
+# The AO/SDR implementation is validated separately on smaller cases because
+# a full 4-size x 40-point sweep is computationally much heavier.
+MAIN_IRS_STRATEGY = "alignment"
+
+# Active cases have P watts at the BS plus P_RIS at the IRS; passive/LoS
+# cases have P watts at the BS. This is a same-BS-power comparison, not an
+# equal-total-system-power comparison.
+POWER_ACCOUNTING = "same_bs_power"
 
 # ===== IRS positions (x, y) =====
 # BS: (0, 0), Target: (200, 0), Sensing RX: (400, 0)
@@ -49,9 +59,9 @@ alpha0 = 2.5     # Path loss exponent
 d0     = 1.0     # Reference distance (m)
 
 # ===== Target channel (CRB-Rate Tradeoff Eq.6) =====
-CAL_ALPHA = 1.0e-32   # Calibration factor for |alpha|^2 (LoS scenario)
-                        # NLoS+IRS 信号经 IRS 反射，前向路径已在 a_eff 中
-                        # |alpha|² 只应含返回路径 L(Target→RX)
+# No empirical inverse-path-loss calibration. Forward attenuation is stored
+# in a_dir/a_eff, while |alpha|² stores the Target→RX return attenuation.
+CAL_ALPHA = 1.0
 
 # ===== CU channel (CRB-Rate Tradeoff Eq.62) =====
 Kc = 1.0        # Rician K-factor for BS->CU
@@ -70,4 +80,5 @@ AO_TOL      = 1e-4
 
 # ===== Reproducibility =====
 SEED       = 0      # CRB-Rate Tradeoff uses h_seed=46 for channel gen
-SEED_CHANNEL = 46   # Same seed for fair comparison
+SEED_CHANNEL = 46   # Direct BS-CU fading realization
+SEED_IRS_CU = 47    # Independent IRS-CU fading; shared across N for fair nesting

@@ -1,14 +1,4 @@
-"""
-导向矢量函数模块
-===============
-对应论文 Eq.(5) 和 Eq.(64)。
-
-用法（像 MATLAB 调 .m 函数）:
-    from steering_vectors import steering_vector, steering_vector_derivative
-    a = steering_vector(4, 0.0)           # BS 侧导向矢量
-    b = steering_vector(32, 0.5)          # 接收侧导向矢量
-    b_dot = steering_vector_derivative(32, 0.5)  # 导数
-"""
+"""Centered-ULA steering vectors and angular derivatives."""
 
 import numpy as np
 

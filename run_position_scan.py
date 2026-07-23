@@ -1,16 +1,4 @@
-"""
-run_position_scan.py — IRS 位置优化扫描（加速版）
-==============================================
-基于 ||a_eff||² 代理指标的快速扫描。
-
-步骤:
-  Step 1: d_br * d_rt 几何代理（超快，纯距离）
-  Step 2: ||a_eff||² 有效信道增益（含路径损耗 + steering vector 对齐）
-  Step 3: 确认最优位置的 SCA 验证（只跑 1 个 gamma_0 点）
-
-用法:
-    python run_position_scan.py
-"""
+"""Pre-screen passive-IRS positions with channel-gain proxies."""
 
 import os
 import time
@@ -23,11 +11,11 @@ from config import (
     N_gamma, N_irs,
     pos_bs, pos_target, pos_rx, pos_irs,
     phi_target, theta_target, phi_cu,
-    sigma2_c, sigma2_s, P, SEED, SEED_CHANNEL,
+    sigma2_c, sigma2_s, P, SEED, SEED_CHANNEL, SEED_IRS_CU,
 )
 from steering_vectors import steering_vector, steering_vector_derivative
 from channels import (
-    generate_rician_channel, compute_alpha_sq,
+    generate_rician_channel, compute_return_alpha_sq,
     generate_irs_bs_channel, generate_irs_target_channel,
     generate_irs_cu_channel,
     compute_effective_a, compute_effective_h, irs_beam_align,
@@ -38,9 +26,6 @@ from rate import compute_rate_irs
 from sca_solver import solve_p4_sca
 
 
-# ========================================================================
-# Step 1 & 2: 代理指标扫描
-# ========================================================================
 def run_proxy_scan(grid_x, grid_y, N_irs, N_irs_secondary=None):
     """
     Scan proxy metrics over a grid of IRS positions.
@@ -91,11 +76,8 @@ def run_proxy_scan(grid_x, grid_y, N_irs, N_irs_secondary=None):
     return result
 
 
-# ========================================================================
-# Step 3: 验证单个位置
-# ========================================================================
 def evaluate_position(pos_irs_tmp, N_irs, gamma_0, ch_shared):
-    """Run NLoS SCA at one position, one gamma_0. Returns (crb, rate, ok)."""
+    """Run passive NLoS SCA at one position and one SINR threshold."""
     d_br = compute_distance(pos_bs, pos_irs_tmp)
     d_rt = compute_distance(pos_irs_tmp, pos_target)
     pos_cu = np.array([1000.0 * np.cos(phi_cu), 1000.0 * np.sin(phi_cu)])
@@ -106,7 +88,9 @@ def evaluate_position(pos_irs_tmp, N_irs, gamma_0, ch_shared):
 
     G = generate_irs_bs_channel(Mt, N_irs, d_br, phi_br, K0, alpha0, d0)
     h_r = generate_irs_target_channel(N_irs, d_rt, phi_rt, K0, alpha0, d0)
-    h_rc = generate_irs_cu_channel(N_irs, d_rc, phi_rc, Kc, K0, alpha0, d0, SEED_CHANNEL)
+    h_rc = generate_irs_cu_channel(
+        N_irs, d_rc, phi_rc, Kc, K0, alpha0, d0, SEED_IRS_CU
+    )
 
     v = irs_beam_align(h_r, G)
     a_eff = compute_effective_a(ch_shared["a_dir"], G, h_r, v, direct_blocked=True)
@@ -125,9 +109,6 @@ def evaluate_position(pos_irs_tmp, N_irs, gamma_0, ch_shared):
     return crb, rate, True
 
 
-# ========================================================================
-# 可视化
-# ========================================================================
 def save_plots(proxy, save_dir="results"):
     """Generate heatmaps."""
     ts = time.strftime('%Y%m%d_%H%M%S')
@@ -178,9 +159,6 @@ def _plot_nodes(ax):
     ax.legend(fontsize=8)
 
 
-# ========================================================================
-# Main
-# ========================================================================
 def main():
     print("=" * 60)
     print("IRS Position Optimization Scan (Fast Mode)")
@@ -197,10 +175,14 @@ def main():
     pos_cu = np.array([1000.0 * np.cos(phi_cu), 1000.0 * np.sin(phi_cu)])
     d_bc = compute_distance(pos_bs, pos_cu)
     h = generate_rician_channel(Mt, phi_cu, Kc, d_bc, K0, alpha0, d0, SEED_CHANNEL)
-    a_dir = steering_vector(Mt, phi_target)
+    a_dir = np.sqrt(path_loss_linear(d_bt, K0, alpha0, d0)) * steering_vector(
+        Mt, phi_target
+    )
     b = steering_vector(Mr, theta_target)
     b_dot = steering_vector_derivative(Mr, theta_target)
-    alpha_sq = compute_alpha_sq(d_bt, d_tr, 1.0, K0, alpha0, d0, CAL_ALPHA)
+    alpha_sq = compute_return_alpha_sq(
+        d_tr, 1.0, K0, alpha0, d0, CAL_ALPHA
+    )
     ch = {"h": h, "a_dir": a_dir, "b": b, "b_dot": b_dot, "alpha_sq": alpha_sq}
 
     print(f"\n  |alpha|^2={alpha_sq:.3e}  d_bt={d_bt:.0f}m  d_tr={d_tr:.0f}m")
@@ -294,8 +276,15 @@ def main():
           f"  d_br x d_rt = {best_16_prod:.1e}"
           f"  ({improvement:.0f}% reduction)")
     print(f"  Best for N=32: ({best_N32_pos[0]:.0f}, {best_N32_pos[1]:.0f})")
-    print(f"\n  Key insight: ||a_eff||^2 rankings match SCA CRB perfectly.")
-    print(f"  => Full-grid SCA skipped. Run run_simulation.py for verification.")
+    print(
+        "\n  Interpretation: ||a_eff||^2 is only a sensing-channel proxy. "
+        "It does not include the CU channel, SINR allocation, Active-IRS "
+        "noise, or Active-IRS output-power constraint."
+    )
+    print(
+        "  => The listed positions are candidates, not proven CRB optima. "
+        "Use full SCA/AO on shortlisted positions for confirmation."
+    )
     print(f"{'=' * 60}")
 
 

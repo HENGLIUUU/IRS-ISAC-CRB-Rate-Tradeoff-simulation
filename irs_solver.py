@@ -1,283 +1,547 @@
 """
-IRS 相移优化求解器 — SDR (Semidefinite Relaxation) — Active IRS 版
-=================================================================
-固定 R_c, R_s 后，优化 Θ = diag(v) 以最小化 CRB。
-Active IRS 支持：|v[n]| ≤ A_MAX（而非 passive 的 |v[n]| = 1）
+IRS reflection-coefficient optimization for the simplified bistatic model.
 
-求解步骤:
-  1. 将目标函数和 SINR 约束写成 v 的二次型
-  2. 松弛 rank-1 约束 → SDP (V ⪰ 0, diag(V) ≤ A_MAX²)
-  3. CVXPY 求解
-  4. 随机化恢复 rank-1 解（投影到 |v| ≤ A_MAX）
+This module keeps the two conventions used by the source models:
+
+    communication: y_c = h_eff^H x,
+    bistatic sensing: y_s = alpha b a_eff^T x + n.
+
+Thus
+
+    h_eff = h_direct + G^H diag(conj(v)) h_cu,
+    a_eff = a_direct + G^T diag(v) h_target.
+
+For the SDP we optimize u = conj(v). The communication channel h_eff and
+the conjugated target vector q_eff = conj(a_eff) are affine in u.
+
+    q_eff = conj(a_direct) + conj(G^T diag(h_target)) u,
+    h_eff = h_direct + G^H diag(h_cu) u.
+
+Important modelling boundary
+----------------------------
+The CRB follows CRB-Rate Tradeoff for Bistatic ISAC with an equivalent
+target channel.
+The Active-IRS noise is included in the CU SINR and IRS output-power
+constraint. The first-pass noise reflected by the target is separately
+quantified and verified to be negligible under the configured geometry, so
+the sensing CRB retains the source model's white-noise assumption. This is
+a transparent one-pass extension, not a reproduction of the double-pass FIM
+in Cramér-Rao Bound Optimization for Active RIS-Empowered ISAC Systems.
 """
 
 import numpy as np
 import cvxpy as cp
-from channels import compute_effective_a, compute_effective_h
+
+from channels import (
+    compute_active_irs_noise_power,
+    compute_effective_a,
+    compute_effective_h,
+    compute_safe_uniform_active_gain,
+    irs_beam_align,
+)
 from config import AO_MAX_ITER, AO_TOL, SDR_TRIALS, A_MAX, P_RIS, SIGMA2_RIS
-from sca_solver import solve_p4_sca
 from crb import compute_crb_irs
+from sca_solver import solve_p4_sca
 
 
-def _build_a_eff_linear_map(G, h_r, N_irs, Mt):
-    h_r_flat = h_r.flatten()
-    A = G.T @ np.diag(h_r_flat)
-    return A
-
-
-def _build_h_eff_linear_map(G, h_rc, N_irs, Mt):
-    h_rc_flat = h_rc.flatten()
-    C = G.T @ np.diag(h_rc_flat)
-    return C
-
-
-def solve_irs_sdr(Rc, Rs, a, h, G, h_r, h_rc,
-                  b, b_dot, alpha_sq,
-                  sigma2_c, sigma2_s, gamma_0,
-                  T, N_irs, Mt, trials=100, active=True):
+def _build_effective_channel_map(G, h_irs):
     """
-    Solve IRS phase shift optimization via SDR (Active or Passive).
-
-    Active IRS: |v[n]| ≤ A_MAX (amplitude constraint)
-    Passive IRS: |v[n]| = 1 (unit modulus)
+    Return B such that G^H diag(conj(v)) h_irs = B u, u=conj(v).
     """
-    a_flat = a.flatten()
-    h_flat = h.flatten()
-    b_flat = b.flatten()
+    h_col = np.asarray(h_irs).reshape(-1)
+    return G.conj().T @ np.diag(h_col)
 
-    norm_b_sq = np.linalg.norm(b_flat) ** 2
-    norm_bdot_sq = np.linalg.norm(b_dot) ** 2
 
-    # ---- Build linear maps ----
-    A_mat = _build_a_eff_linear_map(G, h_r, N_irs, Mt)
-    C_mat = _build_h_eff_linear_map(G, h_rc, N_irs, Mt)
+def _build_target_steering_map(G, h_target):
+    """Return B such that a_eff = a_direct + B v for bistatic sensing."""
+    h_col = np.asarray(h_target).reshape(-1)
+    return G.T @ np.diag(h_col)
 
-    # ---- Precompute quadratic form matrices ----
-    aH_Rc_a = float((a_flat.conj() @ Rc @ a_flat).real)
-    aH_Rs_a = float((a_flat.conj() @ Rs @ a_flat).real)
 
-    M_Rc = A_mat.conj().T @ Rc @ A_mat
-    M_Rs = A_mat.conj().T @ Rs @ A_mat
-    M_hRc = C_mat.conj().T @ Rc @ C_mat
-    M_hRs = C_mat.conj().T @ Rs @ C_mat
+def _augment_quadratic(M, linear, constant):
+    """
+    Build Q with [u;1]^H Q [u;1] = u^H M u + 2 Re(u^H linear)+constant.
+    """
+    n = M.shape[0]
+    Q = np.zeros((n + 1, n + 1), dtype=complex)
+    Q[:n, :n] = (M + M.conj().T) / 2
+    Q[:n, n] = linear
+    Q[n, :n] = linear.conj()
+    Q[n, n] = float(np.real(constant))
+    return Q
 
-    l_Rc = A_mat.conj().T @ Rc @ a_flat
-    l_Rs = A_mat.conj().T @ Rs @ a_flat
-    l_hRc = C_mat.conj().T @ Rc @ h_flat
-    l_hRs = C_mat.conj().T @ Rs @ h_flat
 
-    # ---- Fixed weight w for objective ----
-    gamma_ran = alpha_sq * aH_Rc_a * norm_b_sq / sigma2_s
-    w = gamma_ran / (1 + gamma_ran) if gamma_ran > 0 else 0
+def _active_irs_power_matrix(G, Rc, Rs, sigma2_irs):
+    """
+    Return diagonal D for P_IRS = u^H D u = v^H D v.
 
-    R_tot = Rs + w * Rc
-    M_tot = A_mat.conj().T @ R_tot @ A_mat
-    l_tot = A_mat.conj().T @ R_tot @ a_flat
-    const_obj = float((a_flat.conj() @ R_tot @ a_flat).real)
-
-    # ---- SINR constraint (cross-multiplied) ----
-    M_sinr = M_hRc - gamma_0 * M_hRs
-    l_sinr = l_hRc - gamma_0 * l_hRs
-    const_sinr = (float((h_flat.conj() @ Rc @ h_flat).real)
-                  - gamma_0 * (float((h_flat.conj() @ Rs @ h_flat).real) + sigma2_c))
-
-    # ---- Augmented matrices ----
-    M_obj_aug = np.zeros((N_irs + 1, N_irs + 1), dtype=complex)
-    M_obj_aug[:N_irs, :N_irs] = M_tot
-    M_obj_aug[:N_irs, N_irs] = l_tot
-    M_obj_aug[N_irs, :N_irs] = l_tot.conj()
-    M_obj_aug[N_irs, N_irs] = const_obj
-
-    M_sinr_aug = np.zeros((N_irs + 1, N_irs + 1), dtype=complex)
-    M_sinr_aug[:N_irs, :N_irs] = M_sinr
-    M_sinr_aug[:N_irs, N_irs] = l_sinr
-    M_sinr_aug[N_irs, :N_irs] = l_sinr.conj()
-    M_sinr_aug[N_irs, N_irs] = const_sinr
-
-    # ---- Active RIS power constraint matrix ----
-    # RIS input power: tr(Θ^H Θ (G(Rc+Rs)G^H + σ²_RIS I))
-    # ≈ v^H (diag(G(Rc+Rs)G^H) + σ²_RIS I) v
+    The n-th diagonal entry is the incident signal power at IRS element n
+    plus that element's internal amplifier-noise power.
+    """
     Rx = Rc + Rs
-    G_Rx_GH = G @ Rx @ G.conj().T  # N_irs x N_irs
-    D = np.diag(np.diag(G_Rx_GH).real) + SIGMA2_RIS * np.eye(N_irs)
-    M_power = D  # N_irs x N_irs (diagonal)
+    incident_covariance = G @ Rx @ G.conj().T
+    per_element_input = np.real(np.diag(incident_covariance)) + sigma2_irs
+    return np.diag(np.maximum(per_element_input, 0.0))
 
-    # ---- Solve SDP ----
-    V_var = cp.Variable((N_irs + 1, N_irs + 1), complex=True)
 
-    constraints = [
-        V_var >> 0,                              # PSD
-        V_var[N_irs, N_irs] == 1,                 # augmented element = 1
-    ]
+def _fixed_v_sca_power_constraint(G, v, sigma2_irs, power_budget):
+    """
+    Return K and residual budget for fixed-v SCA:
 
-    # Amplitude constraint: |v[n]|² ≤ A_MAX² (active) or |v[n]|² = 1 (passive)
-    if active:
-        # Active RIS: |v[n]| ≤ A_MAX → diag(V) ≤ A_MAX²
-        constraints.append(cp.diag(V_var)[:N_irs] <= A_MAX ** 2)
-        # Active RIS power constraint: tr(D @ V[:N_irs,:N_irs]) ≤ P_RIS
-        constraints.append(cp.real(cp.trace(M_power @ V_var[:N_irs, :N_irs])) <= P_RIS)
-    else:
-        # Passive IRS: |v[n]| = 1 → diag(V) = 1
-        constraints.append(cp.diag(V_var)[:N_irs] == 1)
-        constraints.append(cp.real(cp.trace(V_var)) <= N_irs + 1)
+        tr((Rc+Rs) K) <= P_RIS - sigma_I² ||v||²,
+        K = G^H diag(|v|²) G.
+    """
+    v_abs_sq = np.abs(np.asarray(v).reshape(-1)) ** 2
+    K = G.conj().T @ np.diag(v_abs_sq) @ G
+    residual = float(power_budget - sigma2_irs * np.sum(v_abs_sq))
+    return (K + K.conj().T) / 2, residual
 
-    # SINR constraint
-    constraints.append(
-        cp.real(cp.trace(M_sinr_aug @ V_var)) >= 0
+
+def _evaluate_candidate(
+    u,
+    Rc,
+    Rs,
+    a_direct,
+    h_direct,
+    target_map,
+    C_map,
+    h_rc,
+    gamma_0,
+    sigma2_c,
+    sigma2_irs,
+    power_matrix,
+    active,
+    b,
+    b_dot,
+    alpha_sq,
+    sigma2_s,
+    T,
+    feasibility_tol=2e-3,
+):
+    """
+    Check a recovered SDP candidate against the original constraints.
+
+    SDP relaxation feasibility does not guarantee that a randomized rank-one
+    vector is feasible. Every candidate is therefore checked again before its
+    CRB is allowed to compete for "best".
+    """
+    u = np.asarray(u).reshape(-1)
+    v = u.conj()
+
+    a_eff = np.asarray(a_direct).reshape(-1) + target_map @ v
+    h_eff = np.asarray(h_direct).reshape(-1) + C_map @ u
+
+    signal = float(np.real(h_eff.conj() @ Rc @ h_eff))
+    sensing_interference = float(np.real(h_eff.conj() @ Rs @ h_eff))
+    irs_noise = (
+        compute_active_irs_noise_power(h_rc, v, sigma2_irs)
+        if active else 0.0
     )
+    denominator = sensing_interference + sigma2_c + irs_noise
+    sinr = signal / max(denominator, 1e-30)
 
-    obj = cp.Maximize(cp.real(cp.trace(M_obj_aug @ V_var)))
+    irs_power = float(np.real(u.conj() @ power_matrix @ u))
+    amplitude_ok = (
+        np.max(np.abs(v)) <= A_MAX * (1 + feasibility_tol)
+        if active
+        else np.max(np.abs(np.abs(v) - 1.0)) <= feasibility_tol
+    )
+    power_ok = (not active) or irs_power <= P_RIS * (1 + feasibility_tol)
+    sinr_ok = sinr >= gamma_0 * (1 - feasibility_tol)
 
-    prob = cp.Problem(obj, constraints)
-    try:
-        prob.solve(solver=cp.SCS, verbose=False, eps=1e-4, max_iters=5000)
-    except Exception as e:
-        return None, {"status": f"SDP solver error: {e}"}
+    if not (amplitude_ok and power_ok and sinr_ok):
+        return None
 
-    if prob.status not in ("optimal", "optimal_inaccurate"):
-        return None, {"status": f"SDP infeasible: {prob.status}"}
-
-    V_opt = V_var.value
-    V_irs = V_opt[:N_irs, :N_irs]
-
-    # ---- Randomization ----
-    v_best = _randomization(V_irs, Rc, Rs, A_mat, a_flat,
-                            b_flat, b_dot,
-                            norm_b_sq, norm_bdot_sq,
-                            alpha_sq, sigma2_s, T, trials,
-                            active=active)
-
-    # ---- Compute CRB with best v ----
-    a_eff = a_flat + A_mat @ v_best
-    crb = _compute_crb_given_aeff(a_eff, Rc, Rs, b_flat, b_dot,
-                                   alpha_sq, sigma2_s, T)
-
-    return v_best, {
-        "status": prob.status,
-        "crb": crb,
-        "SDP_obj": prob.value,
-        "trials_used": trials
+    crb = compute_crb_irs(
+        Rc, Rs, a_eff.reshape(-1, 1), b, b_dot,
+        alpha_sq, sigma2_s, T,
+    )
+    return {
+        "u": u,
+        "v": v,
+        "crb": float(crb),
+        "sinr": float(sinr),
+        "irs_power": irs_power,
     }
 
 
-def _randomization(V, Rc, Rs, A_mat, a_flat,
-                   b_flat, b_dot_flat,
-                   norm_b_sq, norm_bdot_sq,
-                   alpha_sq, sigma2_s, T, trials=100, active=True):
+def _candidate_vectors(V_opt, active, trials, rng):
     """
-    SDR randomization with projection.
-    Passive: project to |v[n]| = 1
-    Active:  project to |v[n]| ≤ A_MAX
+    Yield deterministic and randomized u candidates from augmented SDP V.
+
+    Sampling the full augmented matrix is essential because its final element
+    carries the linear terms. After sampling y=[u_raw;t], divide by t so the
+    augmented coordinate becomes one.
     """
-    N = V.shape[0]
-    best_crb = float('inf')
-    v_best = np.ones(N, dtype=complex)
+    V_hermitian = (V_opt + V_opt.conj().T) / 2
+    eigvals, eigvecs = np.linalg.eigh(V_hermitian)
+    eigvals = np.maximum(eigvals, 0.0)
 
-    try:
-        V_reg = V + 1e-8 * np.eye(N, dtype=complex)
-        L = np.linalg.cholesky(V_reg)
-    except np.linalg.LinAlgError:
-        eigvals, eigvecs = np.linalg.eigh(V)
-        eigvals = np.maximum(eigvals, 0)
-        L = eigvecs @ np.diag(np.sqrt(eigvals))
+    # Principal-eigenvector candidate is deterministic and often strong.
+    principal = eigvecs[:, -1] * np.sqrt(eigvals[-1])
+    raw_candidates = [principal]
 
+    sqrt_V = eigvecs @ np.diag(np.sqrt(eigvals))
     for _ in range(trials):
-        xi = (np.random.randn(N) + 1j * np.random.randn(N)) / np.sqrt(2)
-        v_tilde = L @ xi
+        xi = (
+            rng.standard_normal(V_opt.shape[0])
+            + 1j * rng.standard_normal(V_opt.shape[0])
+        ) / np.sqrt(2)
+        raw_candidates.append(sqrt_V @ xi)
 
+    for y in raw_candidates:
+        if abs(y[-1]) < 1e-10:
+            continue
+        u = y[:-1] / y[-1]
         if active:
-            # Active RIS: clip to |v[n]| ≤ A_MAX
-            mag = np.abs(v_tilde)
-            v = np.where(mag > A_MAX, A_MAX * v_tilde / (mag + 1e-15), v_tilde)
+            magnitude = np.abs(u)
+            u = np.where(
+                magnitude > A_MAX,
+                A_MAX * u / (magnitude + 1e-15),
+                u,
+            )
         else:
-            # Passive IRS: project to unit circle
-            v = v_tilde / (np.abs(v_tilde) + 1e-15)
-
-        a_eff = a_flat + A_mat @ v
-        crb = _compute_crb_given_aeff(a_eff, Rc, Rs,
-                                       b_flat, b_dot_flat,
-                                       alpha_sq, sigma2_s, T)
-        if crb < best_crb:
-            best_crb = crb
-            v_best = v.copy()
-
-    return v_best
+            u = u / (np.abs(u) + 1e-15)
+        yield u
 
 
-def _compute_crb_given_aeff(a_eff, Rc, Rs,
-                            b_flat, b_dot_flat,
-                            alpha_sq, sigma2_s, T):
-    """Compute CRB given effective steering vector. (same as before)"""
-    aH_Rc_a = float((a_eff.conj() @ Rc @ a_eff).real)
-    aH_Rs_a = float((a_eff.conj() @ Rs @ a_eff).real)
-
-    if aH_Rc_a <= 1e-20 and aH_Rs_a <= 1e-20:
-        return 1e10
-
-    norm_b_sq = float(np.linalg.norm(b_flat) ** 2)
-    norm_bdot_sq = float(np.linalg.norm(b_dot_flat) ** 2)
-
-    gamma_ran = alpha_sq * aH_Rc_a * norm_b_sq / sigma2_s
-
-    A_s = aH_Rs_a * norm_bdot_sq
-    A_c = aH_Rc_a * norm_bdot_sq
-
-    if gamma_ran > 0:
-        F = A_s + (gamma_ran / (1 + gamma_ran)) * A_c
-    else:
-        F = A_s
-
-    if F <= 1e-20:
-        return 1e10
-
-    return sigma2_s / (2 * T * alpha_sq * F)
-
-
-# ========================================================================
-# AO 交替优化框架（兼容 Active/Passive IRS）
-# ========================================================================
-def ao_optimize(gamma_0, a_eff_init, h_eff_init, G, h_r, h_rc,
-                b, b_dot, alpha_sq,
-                sigma2_c, sigma2_s, P, Mt, Mr, T, N_irs,
-                direct_blocked=False, a_dir=None, active=True):
+def solve_irs_sdr(
+    Rc,
+    Rs,
+    a_direct,
+    h_direct,
+    G,
+    h_r,
+    h_rc,
+    b,
+    b_dot,
+    alpha_sq,
+    sigma2_c,
+    sigma2_s,
+    gamma_0,
+    T,
+    N_irs,
+    Mt,
+    trials=100,
+    active=True,
+    v_reference=None,
+    random_seed=0,
+    sigma2_irs=SIGMA2_RIS,
+):
     """
-    Alternating optimization for IRS-assisted ISAC.
-    active=True  → Active IRS (amplify)
-    active=False → Passive IRS (unit modulus)
+    Optimize IRS coefficients for fixed Rc and Rs using an SDR surrogate.
+
+    The exact bistatic CRB is non-quadratic in a_eff because its Gaussian
+    information-signal weight depends on a_eff^T Rc a_eff*. We freeze that
+    weight at v_reference, producing one documented quadratic surrogate.
+    AO updates the reference and therefore refreshes the surrogate.
     """
-    v = np.ones(N_irs, dtype=complex)
+    del Mt  # dimensions are inferred and validated from the arrays
+    if sigma2_irs < 0:
+        raise ValueError("sigma2_irs must be non-negative.")
+
+    a_direct = np.asarray(a_direct).reshape(-1)
+    h_direct = np.asarray(h_direct).reshape(-1)
+    h_r_col = np.asarray(h_r).reshape(-1, 1)
+    h_rc_col = np.asarray(h_rc).reshape(-1, 1)
+    if G.shape[0] != N_irs:
+        raise ValueError("N_irs does not match the number of rows in G.")
+
+    target_map = _build_target_steering_map(G, h_r_col)
+    C_map = _build_effective_channel_map(G, h_rc_col)
+
+    if v_reference is None:
+        v_reference = np.ones(N_irs, dtype=complex)
+    u_reference = np.asarray(v_reference).reshape(-1).conj()
+    a_reference = a_direct + target_map @ np.asarray(v_reference).reshape(-1)
+
+    aT_Rc_astar = float(np.real(a_reference @ Rc @ a_reference.conj()))
+    gamma_ran = (
+        alpha_sq * aT_Rc_astar * np.linalg.norm(b) ** 2 / sigma2_s
+    )
+    weight = gamma_ran / (1 + gamma_ran) if gamma_ran > 0 else 0.0
+
+    # Frozen-weight sensing surrogate:
+    # a_eff^T (Rs + weight Rc) a_eff*. With q_eff=conj(a_eff),
+    # this is q_eff^H (Rs + weight Rc) q_eff and is quadratic in u.
+    R_total = Rs + weight * Rc
+    q_direct = a_direct.conj()
+    Q_map = target_map.conj()
+    M_obj = Q_map.conj().T @ R_total @ Q_map
+    l_obj = Q_map.conj().T @ R_total @ q_direct
+    c_obj = np.real(q_direct.conj() @ R_total @ q_direct)
+    Q_obj = _augment_quadratic(M_obj, l_obj, c_obj)
+
+    # Communication constraint:
+    # h_eff^H(Rc-gamma Rs)h_eff
+    # - gamma * active-IRS-noise >= gamma*sigma_c².
+    R_sinr = Rc - gamma_0 * Rs
+    M_sinr = C_map.conj().T @ R_sinr @ C_map
+    l_sinr = C_map.conj().T @ R_sinr @ h_direct
+    c_sinr = (
+        np.real(h_direct.conj() @ R_sinr @ h_direct)
+        - gamma_0 * sigma2_c
+    )
     if active:
-        v = v * (A_MAX / np.sqrt(2))  # initial amplitude for active IRS
-    a_eff = a_eff_init.copy()
-    h_eff = h_eff_init.copy()
+        noise_diagonal = sigma2_irs * np.abs(h_rc_col.reshape(-1)) ** 2
+        M_sinr = M_sinr - gamma_0 * np.diag(noise_diagonal)
+    Q_sinr = _augment_quadratic(M_sinr, l_sinr, c_sinr)
+
+    power_matrix = _active_irs_power_matrix(
+        G, Rc, Rs, sigma2_irs if active else 0.0
+    )
+
+    # Hermitian is not cosmetic: a generic complex variable has a complex
+    # diagonal, for which CVXPY correctly rejects real inequalities.
+    V = cp.Variable((N_irs + 1, N_irs + 1), hermitian=True)
+    constraints = [V >> 0, V[N_irs, N_irs] == 1]
+    diagonal = cp.real(cp.diag(V)[:N_irs])
+    if active:
+        constraints.extend([
+            diagonal <= A_MAX**2,
+            cp.real(cp.trace(power_matrix @ V[:N_irs, :N_irs])) <= P_RIS,
+        ])
+    else:
+        constraints.append(diagonal == 1)
+    constraints.append(cp.real(cp.trace(Q_sinr @ V)) >= 0)
+
+    problem = cp.Problem(
+        cp.Maximize(cp.real(cp.trace(Q_obj @ V))),
+        constraints,
+    )
+    try:
+        problem.solve(
+            solver=cp.SCS,
+            verbose=False,
+            eps=1e-4,
+            max_iters=10000,
+        )
+    except Exception as exc:
+        return None, {"status": f"SDP solver error: {exc}"}
+
+    if problem.status not in ("optimal", "optimal_inaccurate"):
+        return None, {"status": f"SDP infeasible: {problem.status}"}
+
+    rng = np.random.default_rng(random_seed)
+    best = None
+    feasible_count = 0
+    for u in _candidate_vectors(V.value, active, trials, rng):
+        candidate = _evaluate_candidate(
+            u, Rc, Rs, a_direct, h_direct, target_map, C_map, h_rc_col,
+            gamma_0, sigma2_c, sigma2_irs, power_matrix, active,
+            b, b_dot, alpha_sq, sigma2_s, T,
+        )
+        if candidate is None:
+            continue
+        feasible_count += 1
+        if best is None or candidate["crb"] < best["crb"]:
+            best = candidate
+
+    if best is None:
+        return None, {
+            "status": "SDP solved but rank-one recovery found no feasible vector",
+            "sdp_status": problem.status,
+        }
+
+    return best["v"], {
+        "status": problem.status,
+        "crb": best["crb"],
+        "sinr": best["sinr"],
+        "irs_power": best["irs_power"],
+        "sdp_objective": float(problem.value),
+        "feasible_candidates": feasible_count,
+        "trials_used": trials,
+    }
+
+
+def ao_optimize(
+    gamma_0,
+    a_direct,
+    h_direct,
+    G,
+    h_r,
+    h_rc,
+    b,
+    b_dot,
+    alpha_sq,
+    sigma2_c,
+    sigma2_s,
+    P,
+    Mt,
+    Mr,
+    T,
+    N_irs,
+    direct_blocked=False,
+    cu_direct_blocked=False,
+    active=True,
+):
+    """
+    Alternate between BS covariance optimization and IRS optimization.
+
+    Direct channels remain immutable. Every effective channel is recomputed
+    from the latest v, preventing reflected paths from accumulating across AO
+    iterations.
+    """
+    a_base = (
+        np.zeros_like(np.asarray(a_direct).reshape(-1, 1))
+        if direct_blocked else np.asarray(a_direct).reshape(-1, 1)
+    )
+    h_base = (
+        np.zeros_like(np.asarray(h_direct).reshape(-1, 1))
+        if cu_direct_blocked else np.asarray(h_direct).reshape(-1, 1)
+    )
+
+    # Start AO from the closed-form target-alignment baseline. Starting from
+    # all-one phases can trap the frozen-weight SDR sequence at a solution
+    # that is much worse than the inexpensive baseline it is meant to improve.
+    v = irs_beam_align(h_r, G)
+    if active:
+        # The initial point must already satisfy the IRS power constraint,
+        # because a later non-improving SDR step may be rejected and AO will
+        # legitimately return this vector.
+        v *= compute_safe_uniform_active_gain(
+            G, P, P_RIS, SIGMA2_RIS, A_MAX
+        )
 
     history = []
+    Rc = Rs = None
+    status = "max_iter_reached"
 
-    for k in range(AO_MAX_ITER):
-        Rc, Rs, info_sca = solve_p4_sca(gamma_0, h_eff, a_eff, sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_sq)
+    for iteration in range(AO_MAX_ITER):
+        a_eff = compute_effective_a(a_base, G, h_r, v)
+        h_eff = compute_effective_h(h_base, G, h_rc, v)
+        irs_noise = (
+            compute_active_irs_noise_power(h_rc, v, SIGMA2_RIS)
+            if active else 0.0
+        )
+        if active:
+            irs_output_matrix, irs_signal_budget = (
+                _fixed_v_sca_power_constraint(G, v, SIGMA2_RIS, P_RIS)
+            )
+        else:
+            irs_output_matrix = irs_signal_budget = None
+
+        Rc, Rs, sca_info = solve_p4_sca(
+            gamma_0, h_eff, a_eff,
+            sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_sq,
+            extra_noise_power=irs_noise,
+            irs_output_matrix=irs_output_matrix,
+            irs_signal_power_budget=irs_signal_budget,
+        )
         if Rc is None:
-            return None, None, None, {"status": f"SCA failed at AO iter {k}"}
+            return None, None, None, {
+                "status": f"SCA failed at AO iteration {iteration}",
+                "sca": sca_info,
+            }
 
-        a_sdr = a_dir if a_dir is not None and not direct_blocked else np.zeros(Mt, dtype=complex)
-        v_new, info_irs = solve_irs_sdr(
-            Rc, Rs, a_sdr, h_eff, G, h_r, h_rc, b, b_dot, alpha_sq,
-            sigma2_c, sigma2_s, gamma_0, T, N_irs, Mt, trials=SDR_TRIALS,
-            active=active
+        old_crb = compute_crb_irs(
+            Rc, Rs, a_eff, b, b_dot, alpha_sq, sigma2_s, T
+        )
+        v_new, irs_info = solve_irs_sdr(
+            Rc, Rs, a_base, h_base, G, h_r, h_rc,
+            b, b_dot, alpha_sq, sigma2_c, sigma2_s,
+            gamma_0, T, N_irs, Mt,
+            trials=SDR_TRIALS,
+            active=active,
+            v_reference=v,
+            random_seed=iteration,
         )
         if v_new is None:
-            v_new = v
-
-        a_eff_new = compute_effective_a(a_dir if a_dir is not None else a_eff, G, h_r, v_new, direct_blocked=direct_blocked)
-        h_eff_new = compute_effective_h(h_eff, G, h_rc, v_new)
-
-        crb_old = compute_crb_irs(Rc, Rs, a_eff, b, b_dot, alpha_sq, sigma2_s, T)
-        crb_new = compute_crb_irs(Rc, Rs, a_eff_new, b, b_dot, alpha_sq, sigma2_s, T)
-
-        history.append({"iter": k, "crb": crb_new})
-        crb_change = abs(crb_new - crb_old) / (abs(crb_old) + 1e-15)
-        v, a_eff, h_eff = v_new, a_eff_new, h_eff_new
-
-        if crb_change < AO_TOL and k > 0:
+            status = f"IRS recovery stopped at iteration {iteration}"
             break
 
-    return Rc, Rs, v, {"status": f"converged in {k+1} AO iters", "history": history}
+        a_new = compute_effective_a(a_base, G, h_r, v_new)
+        new_crb = compute_crb_irs(
+            Rc, Rs, a_new, b, b_dot, alpha_sq, sigma2_s, T
+        )
+        relative_change = abs(new_crb - old_crb) / (abs(old_crb) + 1e-30)
+        accepted = new_crb <= old_crb * (1 + 1e-8)
+        history.append({
+            "iter": iteration,
+            "crb_before_irs": float(old_crb),
+            "crb_after_irs": float(new_crb),
+            "relative_change": float(relative_change),
+            "irs_status": irs_info["status"],
+            "accepted": accepted,
+        })
+
+        # SDR optimizes a frozen-weight quadratic surrogate, not the exact
+        # CRB. Randomization can therefore produce a feasible vector whose
+        # exact CRB is worse. AO should never accept such a step.
+        if not accepted:
+            status = f"stopped at non-improving IRS step {iteration}"
+            break
+
+        v = v_new
+
+        if relative_change < AO_TOL and iteration > 0:
+            status = f"converged in {iteration + 1} AO iterations"
+            break
+
+    # Rc and Rs above were optimized for the previous v. Solve once more so
+    # the returned triplet (Rc, Rs, v) is internally consistent.
+    a_final = compute_effective_a(a_base, G, h_r, v)
+    h_final = compute_effective_h(h_base, G, h_rc, v)
+    final_irs_noise = (
+        compute_active_irs_noise_power(h_rc, v, SIGMA2_RIS)
+        if active else 0.0
+    )
+    if active:
+        final_output_matrix, final_signal_budget = (
+            _fixed_v_sca_power_constraint(
+                G, v, SIGMA2_RIS, P_RIS
+            )
+        )
+    else:
+        final_output_matrix = final_signal_budget = None
+    Rc, Rs, final_sca = solve_p4_sca(
+        gamma_0, h_final, a_final,
+        sigma2_c, sigma2_s, P, Mt, Mr, b, b_dot, alpha_sq,
+        extra_noise_power=final_irs_noise,
+        irs_output_matrix=final_output_matrix,
+        irs_signal_power_budget=final_signal_budget,
+    )
+    if Rc is None:
+        return None, None, None, {
+            "status": "Final consistency SCA failed",
+            "history": history,
+            "sca": final_sca,
+        }
+
+    final_signal = float(
+        np.real(h_final.conj().T @ Rc @ h_final).item()
+    )
+    final_interference = float(
+        np.real(h_final.conj().T @ Rs @ h_final).item()
+    )
+    final_sinr = final_signal / max(
+        final_interference + sigma2_c + final_irs_noise, 1e-30
+    )
+    final_power_matrix = _active_irs_power_matrix(
+        G, Rc, Rs, SIGMA2_RIS if active else 0.0
+    )
+    final_irs_power = float(np.real(v.conj() @ final_power_matrix @ v))
+    feasibility_tol = 2e-3
+    if (
+        final_sinr < gamma_0 * (1 - feasibility_tol)
+        or (active and final_irs_power > P_RIS * (1 + feasibility_tol))
+        or (active and np.max(np.abs(v)) > A_MAX * (1 + feasibility_tol))
+    ):
+        return None, None, None, {
+            "status": "Final AO solution failed independent feasibility check",
+            "history": history,
+            "sinr": final_sinr,
+            "irs_power": final_irs_power,
+        }
+
+    return Rc, Rs, v, {
+        "status": status,
+        "history": history,
+        "final_sca": final_sca["status"],
+        "sinr": final_sinr,
+        "irs_power": final_irs_power,
+        "max_amplitude": float(np.max(np.abs(v))),
+        "final_crb": float(compute_crb_irs(
+            Rc, Rs, a_final, b, b_dot, alpha_sq, sigma2_s, T
+        )),
+    }

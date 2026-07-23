@@ -6,7 +6,8 @@ COLORS = ['r', 'b', 'g', 'm', 'c', 'y']
 
 
 def plot_irs_comparison(data_no_irs, data_irs_list, labels=None,
-                        save_path='irs_comparison.png', use_log=False):
+                        save_path='irs_comparison.png', use_log=False,
+                        subtitle=None):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
     # LoS (no IRS) — 黑色实线
@@ -48,11 +49,12 @@ def plot_irs_comparison(data_no_irs, data_irs_list, labels=None,
 
     ax1.set_xlabel('Communication Rate (bps/Hz)')
     ax1.set_ylabel('CRB (rad^2)')
-    ax1.set_title('IRS-ISAC: CRB vs Communication Rate')
+    title_suffix = f"\n{subtitle}" if subtitle else ""
+    ax1.set_title('IRS-ISAC: CRB vs Communication Rate' + title_suffix)
 
     ax2.set_xlabel('SINR Threshold (dB)')
     ax2.set_ylabel('CRB (rad^2)')
-    ax2.set_title('IRS-ISAC: CRB vs SINR Threshold')
+    ax2.set_title('IRS-ISAC: CRB vs SINR Threshold' + title_suffix)
 
     plt.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches='tight')

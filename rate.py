@@ -1,13 +1,4 @@
-"""
-通信速率计算函数模块
-===================
-对应论文 Eq.(4) [Case 1] 和 Eq.(13)-(14) [Case 2]。
-
-用法:
-    from rate import compute_rate_case1, compute_rate_case2
-    rate1, sinr1 = compute_rate_case1(Rc, h, sigma2_c)
-    rate2, sinr2 = compute_rate_case2(Rc, Rs, h, sigma2_c)
-"""
+"""Communication SINR and rate formulas."""
 
 import numpy as np
 
@@ -59,21 +50,35 @@ def compute_rate_case2(Rc, Rs, h, sigma2_c):
     return rate, sinr
 
 
-def compute_rate_irs(Rc, Rs, h_eff, sigma2_c):
+def compute_rate_irs(Rc, Rs, h_eff, sigma2_c, irs_noise_power=0.0):
     """
-    Compute communication rate with IRS-enhanced effective channel.
+    Compute the CU rate with an IRS-enhanced effective channel.
 
-    Same formula as Case 2 (Eq.13-14), but uses h_eff instead of h.
+    For a Passive IRS, irs_noise_power is zero and this reduces to Case 2 in
+    CRB-Rate Tradeoff for Bistatic ISAC. An Active IRS has amplifiers at its
+    elements, so their independent noise is added to the denominator:
+
+        SINR = h_eff^H Rc h_eff
+               / (h_eff^H Rs h_eff + sigma2_c + irs_noise_power).
 
     Args:
         Rc: Information covariance (Mt×Mt)
         Rs: Sensing covariance (Mt×Mt)
         h_eff: Effective CU channel (Mt×1)
         sigma2_c: CU noise power
+        irs_noise_power: Active-IRS noise power after the IRS→CU channel
 
     Returns:
         rate: Achievable rate (bps/Hz)
         sinr: SINR (linear scale)
     """
-    rate, sinr = compute_rate_case2(Rc, Rs, h_eff, sigma2_c)
-    return rate.item(), sinr.item()
+    if irs_noise_power < 0:
+        raise ValueError("irs_noise_power must be non-negative.")
+
+    signal = float(np.real(h_eff.conj().T @ Rc @ h_eff).item())
+    sensing_interference = float(np.real(h_eff.conj().T @ Rs @ h_eff).item())
+    total_noise = sigma2_c + irs_noise_power
+
+    sinr = signal / (sensing_interference + total_noise)
+    rate = np.log2(1 + max(sinr, 0.0))
+    return float(rate), float(sinr)
