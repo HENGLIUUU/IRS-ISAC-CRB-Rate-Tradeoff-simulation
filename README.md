@@ -2,12 +2,7 @@
 
 面向双站 ISAC 的数值研究代码。项目以
 *CRB-Rate Tradeoff for Bistatic ISAC* 的 CRB-rate 模型为基础，加入
-只辅助前向照射的单程 Passive/Active IRS：
-
-```text
-BS -> IRS -> Target -> Sensing RX
- \-------> CU
-```
+只辅助前向照射的单程 Passive/Active IRS。
 
 本项目不实现`BS -> RIS -> Target -> RIS -> BS` 的双程感知 FIM。
 
